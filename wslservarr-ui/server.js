@@ -206,6 +206,19 @@ function ensureConfig() {
         apiKey: '',
         port: 8096
       },
+      newshosting: {
+        enabled: false,
+        name: 'newshosting',
+        host: 'news.newshosting.com',
+        port: 563,
+        username: '',
+        password: '',
+        ssl: true,
+        connections: 40,
+        retention: 0,
+        optional: false
+      },
+      indexers: [],
       paths: { 
         mediaRoot: '/mnt/media',
         downloadsRoot: '/mnt/downloads'
@@ -321,6 +334,107 @@ async function upsertArrDownloadClient(appName, cfg) {
   }
 }
 
+async function upsertSabNewshostingServer(cfg) {
+  if (!cfg?.sabnzbd?.enabled || !cfg?.sabnzbd?.apiKey) return;
+  if (!cfg?.newshosting?.enabled) return;
+
+  const ns = cfg.newshosting;
+  const sabUrl = String(cfg.sabnzbd.url || '').replace(/\/$/, '');
+  if (!sabUrl) throw new Error('SABnzbd URL is missing');
+  if (!ns.host || !ns.username || !ns.password) {
+    throw new Error('Newshosting requires host, username, and password');
+  }
+
+  const params = {
+    mode: 'addserver',
+    output: 'json',
+    apikey: cfg.sabnzbd.apiKey,
+    name: ns.name || 'newshosting',
+    host: ns.host,
+    port: Number(ns.port || 563),
+    username: ns.username,
+    password: ns.password,
+    ssl: ns.ssl ? 1 : 0,
+    connections: Number(ns.connections || 40),
+    retention: Number(ns.retention || 0),
+    optional: ns.optional ? 1 : 0,
+    enable: 1
+  };
+
+  const res = await axios.get(`${sabUrl}/api`, { params, timeout: 10000 });
+  const body = res.data;
+  const text = typeof body === 'string' ? body.toLowerCase() : JSON.stringify(body || {}).toLowerCase();
+
+  const ok = (body && (body.status === true || body.status === 'ok' || body.result === true))
+    || text.includes('ok')
+    || text.includes('already exists')
+    || text.includes('duplicate');
+
+  if (!ok) {
+    throw new Error(`Failed to seed Newshosting in SABnzbd: ${typeof body === 'string' ? body : JSON.stringify(body)}`);
+  }
+}
+
+function buildNewznabFields(schemaFields, entry) {
+  return (schemaFields || []).map(f => {
+    const next = { ...f };
+    if (f.name === 'baseUrl' || f.name === 'url') next.value = entry.url;
+    if (f.name === 'apiKey') next.value = entry.apiKey;
+    if (f.name === 'categories' && Array.isArray(entry.categories) && entry.categories.length) {
+      next.value = entry.categories.join(',');
+    }
+    return next;
+  });
+}
+
+async function upsertArrIndexers(appName, cfg) {
+  const arr = appName === 'sonarr' ? cfg.sonarr : cfg.radarr;
+  if (!arr?.enabled || !arr?.apiKey) return;
+
+  const indexers = Array.isArray(cfg.indexers)
+    ? cfg.indexers.filter(i => i && i.url && i.apiKey)
+    : [];
+  if (!indexers.length) return;
+
+  const client = apiClient(arr.url, arr.apiKey);
+  const schemaRes = await client.get('/api/v3/indexer/schema');
+  const schema = (schemaRes.data || []).find(s => String(s.implementationName || '').toLowerCase().includes('newznab'));
+  if (!schema) throw new Error(`${appName}: Newznab schema not found`);
+
+  const listRes = await client.get('/api/v3/indexer');
+  const existingList = Array.isArray(listRes.data) ? listRes.data : [];
+
+  for (let idx = 0; idx < indexers.length; idx++) {
+    const entry = indexers[idx];
+    const fields = buildNewznabFields(schema.fields, entry);
+
+    const existing = existingList.find(ix => {
+      if (ix.name === entry.name) return true;
+      const baseUrl = (ix.fields || []).find(f => f.name === 'baseUrl' || f.name === 'url')?.value;
+      return baseUrl === entry.url;
+    });
+
+    const payload = {
+      ...(existing || {}),
+      enable: true,
+      name: entry.name || `Indexer ${idx + 1}`,
+      implementation: schema.implementation,
+      implementationName: schema.implementationName,
+      configContract: schema.configContract,
+      protocol: 'usenet',
+      priority: Number(entry.priority || existing?.priority || 25),
+      fields,
+      tags: existing?.tags || []
+    };
+
+    if (existing?.id) {
+      await client.put(`/api/v3/indexer/${existing.id}`, payload);
+    } else {
+      await client.post('/api/v3/indexer', payload);
+    }
+  }
+}
+
 async function ensureRootFolder(appName, cfg) {
   const arr = appName === 'sonarr' ? cfg.sonarr : cfg.radarr;
   const rootPath = appName === 'sonarr' ? arr.tvRoot : arr.movieRoot;
@@ -361,6 +475,19 @@ function normalizeConfig(config) {
   next.radarr = next.radarr || { enabled: false, url: 'http://radarr:7878', apiKey: '', port: '7878', movieRoot: '/media/movies' };
   next.sabnzbd = next.sabnzbd || { enabled: false, url: 'http://sabnzbd:8080', apiKey: '', port: '8080', tvCategory: 'tv', movieCategory: 'movies' };
   next.jellyfin = next.jellyfin || { enabled: false, url: 'http://jellyfin:8096', apiKey: '', port: '8096' };
+  next.newshosting = next.newshosting || {
+    enabled: false,
+    name: 'newshosting',
+    host: 'news.newshosting.com',
+    port: 563,
+    username: '',
+    password: '',
+    ssl: true,
+    connections: 40,
+    retention: 0,
+    optional: false
+  };
+  next.indexers = Array.isArray(next.indexers) ? next.indexers : [];
   next.paths = next.paths || { mediaRoot: '/mnt/media', downloadsRoot: '/mnt/downloads' };
   if (typeof next.sonarr.tvRoot === 'string' && next.sonarr.tvRoot.startsWith('/mnt/media')) {
     next.sonarr.tvRoot = next.sonarr.tvRoot.replace('/mnt/media', '/media');
@@ -415,6 +542,19 @@ function buildConfigFromBody(body) {
       apiKey: body.jellyfinApiKey || '',
       port: body.jellyfinPort || '8096'
     },
+    newshosting: {
+      enabled: body.newshostingEnabled === 'on' || body.newshostingEnabled === true,
+      name: body.newshostingName || prev.newshosting.name || 'newshosting',
+      host: body.newshostingHost || prev.newshosting.host || 'news.newshosting.com',
+      port: body.newshostingPort || prev.newshosting.port || 563,
+      username: body.newshostingUsername || prev.newshosting.username || '',
+      password: body.newshostingPassword || prev.newshosting.password || '',
+      ssl: body.newshostingSsl === true || body.newshostingSsl === 'on',
+      connections: body.newshostingConnections || prev.newshosting.connections || 40,
+      retention: body.newshostingRetention || prev.newshosting.retention || 0,
+      optional: body.newshostingOptional === true || body.newshostingOptional === 'on'
+    },
+    indexers: Array.isArray(body.indexers) ? body.indexers : (Array.isArray(prev.indexers) ? prev.indexers : []),
     paths: {
       mediaRoot: body.mediaRoot || '/mnt/media',
       downloadsRoot: body.downloadsRoot || '/mnt/downloads',
@@ -794,19 +934,25 @@ app.post('/api/test/:appName', async (req, res) => {
 
 app.post('/api/apply', async (req, res) => {
   try {
-    const cfg = readConfig();
+    const cfg = normalizeConfig(readConfig());
+
+    if (cfg.newshosting.enabled) {
+      await upsertSabNewshostingServer(cfg);
+    }
 
     if (cfg.sonarr.enabled && cfg.sonarr.apiKey) {
       await ensureRootFolder('sonarr', cfg);
       await upsertArrDownloadClient('sonarr', cfg);
+      await upsertArrIndexers('sonarr', cfg);
     }
 
     if (cfg.radarr.enabled && cfg.radarr.apiKey) {
       await ensureRootFolder('radarr', cfg);
       await upsertArrDownloadClient('radarr', cfg);
+      await upsertArrIndexers('radarr', cfg);
     }
 
-    res.json({ ok: true, message: 'Applied settings to enabled Arr apps' });
+    res.json({ ok: true, message: 'Applied settings to enabled apps (SAB + Arr)' });
   } catch (e) {
     res.status(500).json({ ok: false, error: `Apply failed: ${e.message}` });
   }

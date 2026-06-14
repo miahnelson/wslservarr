@@ -5,6 +5,8 @@ const defaultConfig = {
   radarr: { enabled: false, url: 'http://radarr:7878', apiKey: '', port: '7878', movieRoot: '/media/movies' },
   sabnzbd: { enabled: false, url: 'http://sabnzbd:8080', apiKey: '', port: '8080', tvCategory: 'tv', movieCategory: 'movies' },
   jellyfin: { enabled: false, url: 'http://jellyfin:8096', apiKey: '', port: '8096' },
+  newshosting: { enabled: false, name: 'newshosting', host: 'news.newshosting.com', port: 563, username: '', password: '', ssl: true, connections: 40, retention: 0, optional: false },
+  indexers: [],
   paths: { mediaRoot: '/mnt/media', downloadsRoot: '/mnt/downloads', configRoot: '/mnt/config' },
   runtime: { timezone: 'America/New_York', puid: '1000', pgid: '1000' },
   composeYaml: ''
@@ -27,6 +29,7 @@ function App() {
   const [diagTitle, setDiagTitle] = useState('');
   const [diagText, setDiagText] = useState('');
   const [diagPath, setDiagPath] = useState('');
+  const [indexersJson, setIndexersJson] = useState('[]');
 
   const runningCount = useMemo(() => containers.filter(c => c.status === 'running').length, [containers]);
   const missingCount = useMemo(() => containers.filter(c => c.status === 'missing').length, [containers]);
@@ -37,6 +40,7 @@ function App() {
       const res = await fetch('/api/bootstrap');
       const data = await res.json();
       setConfig(data.config || defaultConfig);
+      setIndexersJson(JSON.stringify((data.config && data.config.indexers) || [], null, 2));
       setContainers(data.containers || []);
       setError('');
     } catch (e) {
@@ -85,6 +89,15 @@ function App() {
   async function saveConfig() {
     setMessage('');
     setError('');
+    let parsedIndexers = [];
+    try {
+      parsedIndexers = JSON.parse(indexersJson || '[]');
+      if (!Array.isArray(parsedIndexers)) throw new Error('Indexers must be a JSON array');
+    } catch (e) {
+      setError(`Invalid indexers JSON: ${e.message}`);
+      return;
+    }
+
     const payload = {
       sonarrEnabled: config.sonarr.enabled,
       sonarrUrl: config.sonarr.url,
@@ -106,6 +119,17 @@ function App() {
       jellyfinUrl: config.jellyfin.url,
       jellyfinApiKey: config.jellyfin.apiKey,
       jellyfinPort: config.jellyfin.port,
+      newshostingEnabled: config.newshosting.enabled,
+      newshostingName: config.newshosting.name,
+      newshostingHost: config.newshosting.host,
+      newshostingPort: config.newshosting.port,
+      newshostingUsername: config.newshosting.username,
+      newshostingPassword: config.newshosting.password,
+      newshostingSsl: config.newshosting.ssl,
+      newshostingConnections: config.newshosting.connections,
+      newshostingRetention: config.newshosting.retention,
+      newshostingOptional: config.newshosting.optional,
+      indexers: parsedIndexers,
       mediaRoot: config.paths.mediaRoot,
       downloadsRoot: config.paths.downloadsRoot,
       configRoot: config.paths.configRoot,
@@ -125,6 +149,7 @@ function App() {
       return;
     }
     setConfig(data.config);
+    setIndexersJson(JSON.stringify(data.config.indexers || [], null, 2));
     setMessage('Configuration saved.');
   }
 
@@ -356,6 +381,28 @@ function App() {
                 <label>Jellyfin API Key (optional)</label><input value={config.jellyfin?.apiKey || ''} onChange={(e) => update('jellyfin.apiKey', e.target.value)} />
               </div>
             </div>
+
+            <h4>Newshosting → SABnzbd</h4>
+            <div className="grid-2">
+              <div>
+                <label><input type="checkbox" checked={!!config.newshosting?.enabled} onChange={(e) => update('newshosting.enabled', e.target.checked)} /> Enable Newshosting seeding</label>
+                <label>Server Name</label><input value={config.newshosting?.name || ''} onChange={(e) => update('newshosting.name', e.target.value)} />
+                <label>Host</label><input value={config.newshosting?.host || ''} onChange={(e) => update('newshosting.host', e.target.value)} />
+                <label>Port</label><input value={config.newshosting?.port || ''} onChange={(e) => update('newshosting.port', e.target.value)} />
+                <label>Username</label><input value={config.newshosting?.username || ''} onChange={(e) => update('newshosting.username', e.target.value)} />
+                <label>Password</label><input type="password" value={config.newshosting?.password || ''} onChange={(e) => update('newshosting.password', e.target.value)} />
+              </div>
+              <div>
+                <label><input type="checkbox" checked={!!config.newshosting?.ssl} onChange={(e) => update('newshosting.ssl', e.target.checked)} /> SSL</label>
+                <label><input type="checkbox" checked={!!config.newshosting?.optional} onChange={(e) => update('newshosting.optional', e.target.checked)} /> Optional server</label>
+                <label>Connections</label><input value={config.newshosting?.connections || ''} onChange={(e) => update('newshosting.connections', e.target.value)} />
+                <label>Retention (days, 0=unlimited)</label><input value={config.newshosting?.retention || ''} onChange={(e) => update('newshosting.retention', e.target.value)} />
+              </div>
+            </div>
+
+            <h4>NZB Indexers (seed to Sonarr/Radarr)</h4>
+            <p className="small">JSON array example: [{"name":"NZBGeek","url":"https://api.nzbgeek.info","apiKey":"...","categories":[5000,5030]}]</p>
+            <textarea className="codebox" value={indexersJson} onChange={(e) => setIndexersJson(e.target.value)} />
 
             <label>Full Compose YAML</label>
             <textarea className="codebox" value={config.composeYaml || ''} onChange={(e) => update('composeYaml', e.target.value)} />
