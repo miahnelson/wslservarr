@@ -123,6 +123,16 @@ function App() {
     setMessage(data.message || `${appName} OK`);
   }
 
+  async function containerAction(appName, action) {
+    const res = await fetch(`/container/${appName}/${action}`, { method: 'POST' });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      setError(data.error || `${action} failed for ${appName}`);
+      return;
+    }
+    await loadBootstrap(false);
+  }
+
   async function applySettings() {
     const res = await fetch('/api/apply', { method: 'POST' });
     const data = await res.json();
@@ -140,6 +150,18 @@ function App() {
     const data = await res.json();
     if (!res.ok || !data.ok) {
       setError(data.error || 'Failed to start deployment');
+      return;
+    }
+    setDeployState(data.state);
+  }
+
+  async function startDeployForApp(appName) {
+    setMessage('');
+    setError('');
+    const res = await fetch(`/api/install/apps/${appName}/start`, { method: 'POST' });
+    const data = await res.json();
+    if (!res.ok || !data.ok) {
+      setError(data.error || `Failed to start ${appName} deployment`);
       return;
     }
     setDeployState(data.state);
@@ -289,6 +311,7 @@ function App() {
         <>
           <div className="card">
             <h2>⚙ Container Runtime</h2>
+            <button onClick={startDeploy} disabled={deployState.running}>{deployState.running ? 'deploying...' : '→ deploy enabled services'}</button>
             <table>
               <thead><tr><th>Service</th><th>Status</th><th>Image</th><th>Controls</th></tr></thead>
               <tbody>
@@ -298,14 +321,18 @@ function App() {
                     <td>{c.status}</td>
                     <td>{c.image || '-'}</td>
                     <td>
-                      <button className="secondary" onClick={() => fetch(`/container/${c.name}/start`, { method: 'POST' }).then(() => loadBootstrap())}>start</button>
-                      <button className="secondary" onClick={() => fetch(`/container/${c.name}/stop`, { method: 'POST' }).then(() => loadBootstrap())}>stop</button>
-                      <button className="secondary" onClick={() => fetch(`/container/${c.name}/restart`, { method: 'POST' }).then(() => loadBootstrap())}>restart</button>
+                      <button className="secondary" onClick={() => containerAction(c.name, 'start')}>start</button>
+                      <button className="secondary" onClick={() => containerAction(c.name, 'stop')}>stop</button>
+                      <button className="secondary" onClick={() => containerAction(c.name, 'restart')}>restart</button>
+                      <button className="secondary" onClick={() => startDeployForApp(c.name)} disabled={deployState.running}>deploy</button>
+                      <button className="secondary" onClick={() => testConnection(c.name)}>test</button>
                     </td>
                   </tr>
                 ))}
               </tbody>
             </table>
+            <p className="small">deploy status: {deployState.running ? 'running' : deployState.success === false ? 'failed' : deployState.success === true ? 'completed' : 'idle'}</p>
+            <pre style={{ maxHeight: 260, overflow: 'auto' }}>{deployLog}</pre>
           </div>
 
           <div className="card">
@@ -322,22 +349,8 @@ function App() {
               </div>
             </div>
             <button onClick={saveConfig}>💾 save all settings</button>
-            <button className="secondary" onClick={restartWizard}>⟲ start setup wizard</button>
-          </div>
-
-          <div className="card">
-            <h2>Connections & Apply</h2>
-            <button className="secondary" onClick={() => testConnection('sonarr')}>test sonarr</button>
-            <button className="secondary" onClick={() => testConnection('radarr')}>test radarr</button>
-            <button className="secondary" onClick={() => testConnection('sabnzbd')}>test sabnzbd</button>
             <button className="success" onClick={applySettings}>✓ apply config</button>
-          </div>
-
-          <div className="card">
-            <h2>⚡ Deploy Services</h2>
-            <button onClick={startDeploy} disabled={deployState.running}>{deployState.running ? 'deploying...' : '→ deploy checked services'}</button>
-            <p className="small">status: {deployState.running ? 'running' : deployState.success === false ? 'failed' : deployState.success === true ? 'completed' : 'idle'}</p>
-            <pre style={{ maxHeight: 260, overflow: 'auto' }}>{deployLog}</pre>
+            <button className="secondary" onClick={restartWizard}>⟲ start setup wizard</button>
           </div>
 
           <div className="card">

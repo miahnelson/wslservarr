@@ -513,7 +513,42 @@ async function installOrUpdateAppsWithProgress(config, onProgress) {
   if (onProgress) onProgress('Deployment completed.');
 }
 
-function startDeployJob(config) {
+async function installOrUpdateSingleAppWithProgress(config, appName, onProgress) {
+  const cfg = normalizeConfig(config);
+  if (!TARGET_CONTAINERS.includes(appName)) {
+    throw new Error(`Unknown app: ${appName}`);
+  }
+
+  const dirs = ['/srv/config/sonarr', '/srv/config/radarr', '/srv/config/sabnzbd', '/srv/downloads', '/srv/media'];
+  if (onProgress) onProgress(`Preparing directories for ${appName}...`);
+  for (const d of dirs) {
+    fs.mkdirSync(d, { recursive: true });
+  }
+
+  if (!cfg[appName]?.enabled) {
+    cfg[appName].enabled = true;
+    if (onProgress) onProgress(`${appName} was disabled in config, enabling for deployment.`);
+  }
+
+  let composeYaml = (cfg.composeYaml && cfg.composeYaml.trim()) ? cfg.composeYaml : buildAppsCompose(cfg);
+  if (!composeYaml.includes(`  ${appName}:`)) {
+    composeYaml = buildAppsCompose(cfg);
+    if (onProgress) onProgress(`Custom compose did not define ${appName}; using generated compose for deployment.`);
+  }
+
+  fs.writeFileSync(APPS_COMPOSE_PATH, composeYaml);
+  if (onProgress) onProgress(`Wrote compose file: ${APPS_COMPOSE_PATH}`);
+
+  if (onProgress) onProgress(`Pulling image for ${appName}...`);
+  await runCommandWithProgress('docker', ['compose', '-f', APPS_COMPOSE_PATH, 'pull', appName], `pull:${appName}`, onProgress);
+
+  if (onProgress) onProgress(`Starting ${appName}...`);
+  await runCommandWithProgress('docker', ['compose', '-f', APPS_COMPOSE_PATH, 'up', '-d', appName], `up:${appName}`, onProgress);
+
+  if (onProgress) onProgress(`${appName} deployment completed.`);
+}
+
+function startDeployJob(config, appName = null) {
   if (deployState.running) {
     throw new Error('A deployment is already in progress.');
   }
@@ -526,11 +561,15 @@ function startDeployJob(config) {
     error: '',
     logs: []
   });
-  pushDeployLog('Deployment started...');
+  pushDeployLog(appName ? `Deployment started for ${appName}...` : 'Deployment started...');
 
   (async () => {
     try {
-      await installOrUpdateAppsWithProgress(config, pushDeployLog);
+      if (appName) {
+        await installOrUpdateSingleAppWithProgress(config, appName, pushDeployLog);
+      } else {
+        await installOrUpdateAppsWithProgress(config, pushDeployLog);
+      }
       setDeployState({
         running: false,
         finishedAt: new Date().toISOString(),
@@ -737,6 +776,21 @@ app.post('/api/install/apps/start', (req, res) => {
     res.json({ ok: true, state: deployState });
   } catch (e) {
     res.status(409).json({ ok: false, error: e.message, state: deployState });
+  }
+});
+
+app.post('/api/install/apps/:appName/start', (req, res) => {
+  try {
+    const appName = req.params.appName;
+    if (!TARGET_CONTAINERS.includes(appName)) {
+      return res.status(400).json({ ok: false, error: 'Unknown app', state: deployState });
+    }
+
+    const cfg = normalizeConfig(readConfig());
+    startDeployJob(cfg, appName);
+    return res.json({ ok: true, state: deployState });
+  } catch (e) {
+    return res.status(409).json({ ok: false, error: e.message, state: deployState });
   }
 });
 
