@@ -28,11 +28,37 @@ function ensureConfig() {
 
   if (!fs.existsSync(CONFIG_PATH)) {
     const sample = {
-      sonarr: { url: 'http://sonarr:8989', apiKey: '' },
-      radarr: { url: 'http://radarr:7878', apiKey: '' },
-      sabnzbd: { url: 'http://sabnzbd:8080', apiKey: '', tvCategory: 'tv', movieCategory: 'movies' },
-      paths: { tvRoot: '/srv/media/tv', movieRoot: '/srv/media/movies' },
-      runtime: { timezone: 'America/New_York', puid: '1000', pgid: '1000' }
+      sonarr: { 
+        enabled: false,
+        url: 'http://sonarr:8989', 
+        apiKey: '',
+        port: 8989,
+        tvRoot: '/mnt/media/tv'
+      },
+      radarr: { 
+        enabled: false,
+        url: 'http://radarr:7878', 
+        apiKey: '',
+        port: 7878,
+        movieRoot: '/mnt/media/movies'
+      },
+      sabnzbd: { 
+        enabled: false,
+        url: 'http://sabnzbd:8080', 
+        apiKey: '',
+        port: 8080,
+        tvCategory: 'tv', 
+        movieCategory: 'movies'
+      },
+      paths: { 
+        mediaRoot: '/mnt/media',
+        downloadsRoot: '/mnt/downloads'
+      },
+      runtime: { 
+        timezone: 'America/New_York', 
+        puid: '1000', 
+        pgid: '1000' 
+      }
     };
     fs.writeFileSync(CONFIG_PATH, JSON.stringify(sample, null, 2));
   }
@@ -115,8 +141,10 @@ async function upsertArrDownloadClient(appName, cfg) {
   }
 }
 
-async function ensureRootFolder(appName, rootPath, cfg) {
+async function ensureRootFolder(appName, cfg) {
   const arr = appName === 'sonarr' ? cfg.sonarr : cfg.radarr;
+  const rootPath = appName === 'sonarr' ? arr.tvRoot : arr.movieRoot;
+  
   const client = apiClient(arr.url, arr.apiKey);
   const list = await client.get('/api/v3/rootfolder');
   const exists = list.data.some(r => r.path === rootPath || r.path === `${rootPath}/`);
@@ -149,6 +177,10 @@ async function getContainerStatuses() {
 
 function normalizeConfig(config) {
   const next = { ...config };
+  next.sonarr = next.sonarr || { enabled: false, url: 'http://sonarr:8989', apiKey: '', port: '8989', tvRoot: '/mnt/media/tv' };
+  next.radarr = next.radarr || { enabled: false, url: 'http://radarr:7878', apiKey: '', port: '7878', movieRoot: '/mnt/media/movies' };
+  next.sabnzbd = next.sabnzbd || { enabled: false, url: 'http://sabnzbd:8080', apiKey: '', port: '8080', tvCategory: 'tv', movieCategory: 'movies' };
+  next.paths = next.paths || { mediaRoot: '/mnt/media', downloadsRoot: '/mnt/downloads' };
   next.runtime = next.runtime || {};
   next.runtime.timezone = next.runtime.timezone || 'America/New_York';
   next.runtime.puid = String(next.runtime.puid || '1000');
@@ -160,8 +192,68 @@ function buildAppsCompose(cfg) {
   const tz = cfg.runtime.timezone;
   const puid = cfg.runtime.puid;
   const pgid = cfg.runtime.pgid;
+  const mediaRoot = cfg.paths.mediaRoot || '/mnt/media';
+  const downloadsRoot = cfg.paths.downloadsRoot || '/mnt/downloads';
 
-  return `services:\n  sabnzbd:\n    image: lscr.io/linuxserver/sabnzbd:latest\n    container_name: sabnzbd\n    environment:\n      - PUID=${puid}\n      - PGID=${pgid}\n      - TZ=${tz}\n    volumes:\n      - /srv/config/sabnzbd:/config\n      - /srv/downloads:/downloads\n    ports:\n      - "8080:8080"\n    restart: unless-stopped\n\n  sonarr:\n    image: lscr.io/linuxserver/sonarr:latest\n    container_name: sonarr\n    environment:\n      - PUID=${puid}\n      - PGID=${pgid}\n      - TZ=${tz}\n    volumes:\n      - /srv/config/sonarr:/config\n      - /srv/media:/media\n      - /srv/downloads:/downloads\n    ports:\n      - "8989:8989"\n    restart: unless-stopped\n\n  radarr:\n    image: lscr.io/linuxserver/radarr:latest\n    container_name: radarr\n    environment:\n      - PUID=${puid}\n      - PGID=${pgid}\n      - TZ=${tz}\n    volumes:\n      - /srv/config/radarr:/config\n      - /srv/media:/media\n      - /srv/downloads:/downloads\n    ports:\n      - "7878:7878"\n    restart: unless-stopped\n`;
+  let compose = 'services:\n';
+
+  if (cfg.sabnzbd.enabled) {
+    compose += `  sabnzbd:
+    image: lscr.io/linuxserver/sabnzbd:latest
+    container_name: sabnzbd
+    environment:
+      - PUID=${puid}
+      - PGID=${pgid}
+      - TZ=${tz}
+    volumes:
+      - /mnt/config/sabnzbd:/config
+      - ${downloadsRoot}:/downloads
+    ports:
+      - "${cfg.sabnzbd.port}:8080"
+    restart: unless-stopped
+
+`;
+  }
+
+  if (cfg.sonarr.enabled) {
+    compose += `  sonarr:
+    image: lscr.io/linuxserver/sonarr:latest
+    container_name: sonarr
+    environment:
+      - PUID=${puid}
+      - PGID=${pgid}
+      - TZ=${tz}
+    volumes:
+      - /mnt/config/sonarr:/config
+      - ${mediaRoot}:/media
+      - ${downloadsRoot}:/downloads
+    ports:
+      - "${cfg.sonarr.port}:8989"
+    restart: unless-stopped
+
+`;
+  }
+
+  if (cfg.radarr.enabled) {
+    compose += `  radarr:
+    image: lscr.io/linuxserver/radarr:latest
+    container_name: radarr
+    environment:
+      - PUID=${puid}
+      - PGID=${pgid}
+      - TZ=${tz}
+    volumes:
+      - /mnt/config/radarr:/config
+      - ${mediaRoot}:/media
+      - ${downloadsRoot}:/downloads
+    ports:
+      - "${cfg.radarr.port}:7878"
+    restart: unless-stopped
+
+`;
+  }
+
+  return compose;
 }
 
 async function installOrUpdateApps(config) {
@@ -176,7 +268,68 @@ async function installOrUpdateApps(config) {
   await execFileAsync('docker', ['compose', '-f', APPS_COMPOSE_PATH, 'up', '-d']);
 }
 
+function isFirstRun() {
+  if (!fs.existsSync(CONFIG_PATH)) return true;
+  const config = JSON.parse(fs.readFileSync(CONFIG_PATH, 'utf8'));
+  // First run if no apps are enabled yet
+  return !config.sonarr?.enabled && !config.radarr?.enabled && !config.sabnzbd?.enabled;
+}
+
+app.get('/wizard', (req, res) => {
+  res.render('wizard');
+});
+
+app.post('/wizard', (req, res) => {
+  const enabledApps = [];
+  if (req.body.sonarrEnabled === 'on') enabledApps.push('sonarr');
+  if (req.body.radarrEnabled === 'on') enabledApps.push('radarr');
+  if (req.body.sabnzbdEnabled === 'on') enabledApps.push('sabnzbd');
+
+  const config = {
+    sonarr: {
+      enabled: req.body.sonarrEnabled === 'on',
+      url: 'http://sonarr:8989',
+      apiKey: '',
+      port: 8989,
+      tvRoot: req.body.sonarrMediaPath || '/mnt/media/tv'
+    },
+    radarr: {
+      enabled: req.body.radarrEnabled === 'on',
+      url: 'http://radarr:7878',
+      apiKey: '',
+      port: 7878,
+      movieRoot: req.body.radarrMediaPath || '/mnt/media/movies'
+    },
+    sabnzbd: {
+      enabled: req.body.sabnzbdEnabled === 'on',
+      url: 'http://sabnzbd:8080',
+      apiKey: '',
+      port: 8080,
+      tvCategory: 'tv',
+      movieCategory: 'movies'
+    },
+    paths: {
+      mediaRoot: req.body.mediaRoot || '/mnt/media',
+      downloadsRoot: req.body.downloadsRoot || '/mnt/downloads',
+      configRoot: req.body.configRoot || '/mnt/config'
+    },
+    runtime: {
+      timezone: req.body.timezone || 'America/New_York',
+      puid: req.body.puid || '1000',
+      pgid: req.body.pgid || '1000'
+    }
+  };
+
+  writeConfig(config);
+  res.redirect('/?message=Wizard completed! Configure your apps above.');
+});
+
 app.get('/', async (req, res) => {
+  // Check if this is first run
+  if (isFirstRun()) {
+    return res.redirect('/wizard');
+  }
+
   const config = normalizeConfig(readConfig());
   let containers = [];
   try {
@@ -195,17 +348,31 @@ app.get('/', async (req, res) => {
 
 app.post('/config', (req, res) => {
   const next = {
-    sonarr: { url: req.body.sonarrUrl || '', apiKey: req.body.sonarrApiKey || '' },
-    radarr: { url: req.body.radarrUrl || '', apiKey: req.body.radarrApiKey || '' },
+    sonarr: {
+      enabled: req.body.sonarrEnabled === 'on',
+      url: req.body.sonarrUrl || 'http://sonarr:8989',
+      apiKey: req.body.sonarrApiKey || '',
+      port: req.body.sonarrPort || '8989',
+      tvRoot: req.body.tvRoot || '/mnt/media/tv'
+    },
+    radarr: {
+      enabled: req.body.radarrEnabled === 'on',
+      url: req.body.radarrUrl || 'http://radarr:7878',
+      apiKey: req.body.radarrApiKey || '',
+      port: req.body.radarrPort || '7878',
+      movieRoot: req.body.movieRoot || '/mnt/media/movies'
+    },
     sabnzbd: {
-      url: req.body.sabUrl || '',
+      enabled: req.body.sabnzbdEnabled === 'on',
+      url: req.body.sabUrl || 'http://sabnzbd:8080',
       apiKey: req.body.sabApiKey || '',
+      port: req.body.sabPort || '8080',
       tvCategory: req.body.tvCategory || 'tv',
       movieCategory: req.body.movieCategory || 'movies'
     },
     paths: {
-      tvRoot: req.body.tvRoot || '/srv/media/tv',
-      movieRoot: req.body.movieRoot || '/srv/media/movies'
+      mediaRoot: req.body.mediaRoot || '/mnt/media',
+      downloadsRoot: req.body.downloadsRoot || '/mnt/downloads'
     },
     runtime: {
       timezone: req.body.timezone || 'America/New_York',
@@ -237,13 +404,17 @@ app.post('/apply', async (req, res) => {
   try {
     const cfg = readConfig();
 
-    await ensureRootFolder('sonarr', cfg.paths.tvRoot, cfg);
-    await ensureRootFolder('radarr', cfg.paths.movieRoot, cfg);
+    if (cfg.sonarr.enabled && cfg.sonarr.apiKey) {
+      await ensureRootFolder('sonarr', cfg);
+      await upsertArrDownloadClient('sonarr', cfg);
+    }
 
-    await upsertArrDownloadClient('sonarr', cfg);
-    await upsertArrDownloadClient('radarr', cfg);
+    if (cfg.radarr.enabled && cfg.radarr.apiKey) {
+      await ensureRootFolder('radarr', cfg);
+      await upsertArrDownloadClient('radarr', cfg);
+    }
 
-    res.redirect('/?message=Applied settings to Sonarr and Radarr');
+    res.redirect('/?message=Applied settings to enabled Arr apps');
   } catch (e) {
     res.redirect(`/?error=${encodeURIComponent(`Apply failed: ${e.message}`)}`);
   }

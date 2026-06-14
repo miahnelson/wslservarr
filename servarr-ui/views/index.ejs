@@ -4,40 +4,55 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
   <title>Servarr UI</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Fira+Code:wght@400;500;600;700&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="/styles.css" />
 </head>
 <body>
   <div class="container">
-    <h1>Servarr UI</h1>
-    <p class="small">Minimal control plane for Sonarr, Radarr, and SABnzbd.</p>
+    <!-- Header -->
+    <h1>❯ servarr</h1>
+    <p class="subtitle">distributed media orchestration platform</p>
 
+    <!-- Messages -->
     <% if (message) { %>
-      <div class="msg ok"><%= message %></div>
+      <div class="msg ok">✓ <%= message %></div>
     <% } %>
     <% if (error) { %>
-      <div class="msg err"><%= error %></div>
+      <div class="msg err">⚠ <%= error %></div>
     <% } %>
 
+    <!-- Container Status -->
     <div class="card">
-      <h2>Container Status</h2>
-      <p class="small">Install the core apps first if they are missing.</p>
-      <form method="post" action="/install/apps" style="margin-bottom: 12px;">
-        <button type="submit">Install / Update Sonarr + Radarr + SABnzbd</button>
-      </form>
+      <h2>⚙ Container Runtime</h2>
+      <p class="card-subtitle">Current deployment state and health</p>
       <table>
         <thead>
-          <tr><th>Name</th><th>Status</th><th>Image</th><th>Actions</th></tr>
+          <tr>
+            <th>Service</th>
+            <th>Status</th>
+            <th>Image</th>
+            <th>Controls</th>
+          </tr>
         </thead>
         <tbody>
           <% containers.forEach(c => { %>
             <tr>
-              <td><%= c.name %></td>
-              <td class="<%= c.status === 'running' ? 'status-running' : 'status-stopped' %>"><%= c.status %></td>
-              <td><%= c.image || '-' %></td>
+              <td><strong><%= c.name %></strong></td>
+              <td>
+                <% if (c.status === 'running') { %>
+                  <span class="status-running">● running</span>
+                <% } else if (c.status === 'missing') { %>
+                  <span class="status-missing">○ not deployed</span>
+                <% } else { %>
+                  <span class="status-stopped">● stopped</span>
+                <% } %>
+              </td>
+              <td><code class="small"><%= c.image || '-' %></code></td>
               <td class="actions">
-                <button class="secondary" onclick="containerAction('<%= c.name %>','start')">Start</button>
-                <button class="secondary" onclick="containerAction('<%= c.name %>','stop')">Stop</button>
-                <button class="secondary" onclick="containerAction('<%= c.name %>','restart')">Restart</button>
+                <button class="secondary small-btn" onclick="containerAction('<%= c.name %>','start')" title="Start service">start</button>
+                <button class="secondary small-btn" onclick="containerAction('<%= c.name %>','stop')" title="Stop service">stop</button>
+                <button class="secondary small-btn" onclick="containerAction('<%= c.name %>','restart')" title="Restart service">↻</button>
               </td>
             </tr>
           <% }) %>
@@ -45,70 +60,194 @@
       </table>
     </div>
 
+    <!-- Configuration Form -->
     <form method="post" action="/config" class="card">
-      <h2>Connections and Paths</h2>
-      <div class="grid">
-        <div>
-          <label>Sonarr URL</label>
-          <input name="sonarrUrl" value="<%= config.sonarr.url %>" />
-          <label>Sonarr API Key</label>
-          <input name="sonarrApiKey" value="<%= config.sonarr.apiKey %>" />
-          <button formaction="/test/sonarr" formmethod="post" class="secondary" type="submit">Test Sonarr</button>
-        </div>
-        <div>
-          <label>Radarr URL</label>
-          <input name="radarrUrl" value="<%= config.radarr.url %>" />
-          <label>Radarr API Key</label>
-          <input name="radarrApiKey" value="<%= config.radarr.apiKey %>" />
-          <button formaction="/test/radarr" formmethod="post" class="secondary" type="submit">Test Radarr</button>
-        </div>
-        <div>
-          <label>SABnzbd URL</label>
-          <input name="sabUrl" value="<%= config.sabnzbd.url %>" />
-          <label>SABnzbd API Key</label>
-          <input name="sabApiKey" value="<%= config.sabnzbd.apiKey %>" />
-          <button formaction="/test/sabnzbd" formmethod="post" class="secondary" type="submit">Test SABnzbd</button>
+      <!-- Shared Settings -->
+      <div class="shared-settings">
+        <h3>🌐 Shared Configuration</h3>
+        <p class="card-subtitle">Common paths and runtime parameters</p>
+        <div class="grid-2">
+          <div>
+            <label>Media Root (WSL Path)</label>
+            <input name="mediaRoot" value="<%= config.paths.mediaRoot %>" placeholder="/mnt/media" />
+            <label>Downloads Root (WSL Path)</label>
+            <input name="downloadsRoot" value="<%= config.paths.downloadsRoot %>" placeholder="/mnt/downloads" />
+          </div>
+          <div>
+            <label>Timezone</label>
+            <input name="timezone" value="<%= config.runtime.timezone %>" placeholder="America/New_York" />
+            <label>PUID:PGID</label>
+            <div style="display: flex; gap: 12px;">
+              <input name="puid" value="<%= config.runtime.puid %>" placeholder="1000" style="flex: 1;" />
+              <input name="pgid" value="<%= config.runtime.pgid %>" placeholder="1000" style="flex: 1;" />
+            </div>
+          </div>
         </div>
       </div>
 
-      <div class="grid">
-        <div>
-          <label>TV Root Folder (Sonarr)</label>
-          <input name="tvRoot" value="<%= config.paths.tvRoot %>" />
-          <label>Timezone</label>
-          <input name="timezone" value="<%= (config.runtime && config.runtime.timezone) || 'America/New_York' %>" />
+      <!-- Sonarr Section -->
+      <div class="container-section">
+        <div class="section-header" onclick="toggleSection(this)">
+          <input type="checkbox" name="sonarrEnabled" <%= config.sonarr.enabled ? 'checked' : '' %> />
+          <div>
+            <h3>📺 Sonarr</h3>
+            <p class="small" style="margin: 4px 0 0 0;">TV show management & automation</p>
+          </div>
+          <span class="status-badge <%= config.sonarr.enabled ? 'enabled' : 'disabled' %>">
+            <%= config.sonarr.enabled ? 'enabled' : 'disabled' %>
+          </span>
+          <span class="toggle-arrow">▼</span>
         </div>
-        <div>
-          <label>Movie Root Folder (Radarr)</label>
-          <input name="movieRoot" value="<%= config.paths.movieRoot %>" />
-          <label>PUID</label>
-          <input name="puid" value="<%= (config.runtime && config.runtime.puid) || '1000' %>" />
-          <label>PGID</label>
-          <input name="pgid" value="<%= (config.runtime && config.runtime.pgid) || '1000' %>" />
-        </div>
-        <div>
-          <label>TV Category (SABnzbd)</label>
-          <input name="tvCategory" value="<%= config.sabnzbd.tvCategory %>" />
-          <label>Movie Category (SABnzbd)</label>
-          <input name="movieCategory" value="<%= config.sabnzbd.movieCategory %>" />
+        <div class="section-content">
+          <div class="grid-2">
+            <div>
+              <label>Service URL</label>
+              <input name="sonarrUrl" value="<%= config.sonarr.url %>" placeholder="http://sonarr:8989" />
+              <label>API Key</label>
+              <input name="sonarrApiKey" value="<%= config.sonarr.apiKey %>" type="password" placeholder="••••••••••••••••" />
+            </div>
+            <div>
+              <label>Port Binding</label>
+              <input name="sonarrPort" value="<%= config.sonarr.port %>" placeholder="8989" />
+              <label>Media Path (TV)</label>
+              <input name="tvRoot" value="<%= config.sonarr.tvRoot %>" placeholder="/mnt/media/tv" />
+            </div>
+          </div>
+          <div class="actions">
+            <button formaction="/test/sonarr" formmethod="post" class="secondary" type="submit">→ test connection</button>
+            <button formaction="/apply" formmethod="post" class="success" type="submit">✓ apply config</button>
+          </div>
         </div>
       </div>
 
-      <button type="submit">Save</button>
-      <button formaction="/apply" formmethod="post" type="submit">Apply to Arr Apps</button>
+      <!-- Radarr Section -->
+      <div class="container-section">
+        <div class="section-header" onclick="toggleSection(this)">
+          <input type="checkbox" name="radarrEnabled" <%= config.radarr.enabled ? 'checked' : '' %> />
+          <div>
+            <h3>🎬 Radarr</h3>
+            <p class="small" style="margin: 4px 0 0 0;">Movie management & acquisition</p>
+          </div>
+          <span class="status-badge <%= config.radarr.enabled ? 'enabled' : 'disabled' %>">
+            <%= config.radarr.enabled ? 'enabled' : 'disabled' %>
+          </span>
+          <span class="toggle-arrow">▼</span>
+        </div>
+        <div class="section-content">
+          <div class="grid-2">
+            <div>
+              <label>Service URL</label>
+              <input name="radarrUrl" value="<%= config.radarr.url %>" placeholder="http://radarr:7878" />
+              <label>API Key</label>
+              <input name="radarrApiKey" value="<%= config.radarr.apiKey %>" type="password" placeholder="••••••••••••••••" />
+            </div>
+            <div>
+              <label>Port Binding</label>
+              <input name="radarrPort" value="<%= config.radarr.port %>" placeholder="7878" />
+              <label>Media Path (Movies)</label>
+              <input name="movieRoot" value="<%= config.radarr.movieRoot %>" placeholder="/mnt/media/movies" />
+            </div>
+          </div>
+          <div class="actions">
+            <button formaction="/test/radarr" formmethod="post" class="secondary" type="submit">→ test connection</button>
+            <button formaction="/apply" formmethod="post" class="success" type="submit">✓ apply config</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- SABnzbd Section -->
+      <div class="container-section">
+        <div class="section-header" onclick="toggleSection(this)">
+          <input type="checkbox" name="sabnzbdEnabled" <%= config.sabnzbd.enabled ? 'checked' : '' %> />
+          <div>
+            <h3>🔽 SABnzbd</h3>
+            <p class="small" style="margin: 4px 0 0 0;">Usenet binary downloader</p>
+          </div>
+          <span class="status-badge <%= config.sabnzbd.enabled ? 'enabled' : 'disabled' %>">
+            <%= config.sabnzbd.enabled ? 'enabled' : 'disabled' %>
+          </span>
+          <span class="toggle-arrow">▼</span>
+        </div>
+        <div class="section-content">
+          <div class="grid-2">
+            <div>
+              <label>Service URL</label>
+              <input name="sabUrl" value="<%= config.sabnzbd.url %>" placeholder="http://sabnzbd:8080" />
+              <label>API Key</label>
+              <input name="sabApiKey" value="<%= config.sabnzbd.apiKey %>" type="password" placeholder="••••••••••••••••" />
+            </div>
+            <div>
+              <label>Port Binding</label>
+              <input name="sabPort" value="<%= config.sabnzbd.port %>" placeholder="8080" />
+              <label>Categories</label>
+              <div style="display: flex; gap: 12px;">
+                <input name="tvCategory" value="<%= config.sabnzbd.tvCategory %>" placeholder="tv" style="flex: 1;" />
+                <input name="movieCategory" value="<%= config.sabnzbd.movieCategory %>" placeholder="movies" style="flex: 1;" />
+              </div>
+            </div>
+          </div>
+          <div class="actions">
+            <button formaction="/test/sabnzbd" formmethod="post" class="secondary" type="submit">→ test connection</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Save Button -->
+      <button type="submit" style="width: 100%; margin-top: 24px; padding: 14px; font-size: 1rem;">💾 save all settings</button>
     </form>
+
+    <!-- Deploy Section -->
+    <form method="post" action="/install/apps" class="card">
+      <h2>⚡ Deploy Services</h2>
+      <p class="card-subtitle">Install & configure enabled services</p>
+      <button type="submit" style="width: 100%; padding: 14px; font-size: 1rem;">→ deploy checked services</button>
+    </form>
+
+    <!-- Footer -->
+    <div style="text-align: center; color: var(--text-secondary); margin-top: 40px; padding-top: 20px; border-top: 1px solid var(--border); font-size: 0.9rem;">
+      <p>servarr v1.0 • distributed orchestration framework<br>
+      <span style="color: var(--accent);">❯</span> engineered with precision
+      <br>
+      <a href="/wizard" style="color: var(--accent); text-decoration: none; margin-top: 12px; display: inline-block;">⟲ re-run setup wizard</a></p>
+    </div>
   </div>
 
   <script>
+    function toggleSection(header) {
+      const content = header.nextElementSibling;
+      const arrow = header.querySelector('.toggle-arrow');
+      content.classList.toggle('open');
+      arrow.classList.toggle('open');
+    }
+
     async function containerAction(name, action) {
       const r = await fetch(`/container/${name}/${action}`, { method: 'POST' });
       if (!r.ok) {
         const body = await r.json().catch(() => ({}));
-        alert(body.error || 'Action failed');
+        alert(`[${action.toUpperCase()}] ${body.error || 'Action failed'}`);
         return;
       }
       location.reload();
     }
+
+    // Update status badge on checkbox change
+    document.querySelectorAll('.section-header input[type="checkbox"]').forEach(cb => {
+      cb.addEventListener('change', function() {
+        const header = this.closest('.section-header');
+        const badge = header.querySelector('.status-badge');
+        const isChecked = this.checked;
+        badge.textContent = isChecked ? 'enabled' : 'disabled';
+        badge.className = isChecked ? 'status-badge enabled' : 'status-badge disabled';
+      });
+    });
+
+    // Add keyboard shortcut for save
+    document.addEventListener('keydown', function(e) {
+      if ((e.ctrlKey || e.metaKey) && e.key === 's') {
+        e.preventDefault();
+        document.querySelector('form').dispatchEvent(new Event('submit'));
+      }
+    });
   </script>
 </body>
 </html>

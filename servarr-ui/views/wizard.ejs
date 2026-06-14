@@ -1,0 +1,377 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Servarr Setup Wizard</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Fira+Code:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/styles.css" />
+  <style>
+    .wizard-container {
+      max-width: 700px;
+      margin: 60px auto;
+      padding: 0 24px;
+    }
+
+    .wizard-header {
+      text-align: center;
+      margin-bottom: 40px;
+    }
+
+    .wizard-header h1 {
+      margin-bottom: 8px;
+    }
+
+    .wizard-step {
+      background: var(--bg-secondary);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 40px;
+      margin-bottom: 24px;
+      box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+    }
+
+    .step-number {
+      display: inline-block;
+      background: linear-gradient(135deg, var(--accent), #06b6d4);
+      color: #000;
+      width: 40px;
+      height: 40px;
+      border-radius: 50%;
+      line-height: 40px;
+      text-align: center;
+      font-weight: 700;
+      margin-bottom: 16px;
+      font-size: 1.2rem;
+    }
+
+    .step-title {
+      font-size: 1.5rem;
+      margin: 16px 0 8px 0;
+      color: var(--text-primary);
+    }
+
+    .step-subtitle {
+      color: var(--text-secondary);
+      margin-bottom: 24px;
+      font-size: 0.95rem;
+    }
+
+    .checkbox-group {
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+      margin-bottom: 28px;
+    }
+
+    .checkbox-item {
+      display: flex;
+      align-items: flex-start;
+      gap: 12px;
+      padding: 16px;
+      background: var(--bg-tertiary);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      cursor: pointer;
+      transition: all 0.2s ease;
+    }
+
+    .checkbox-item:hover {
+      border-color: var(--accent);
+      background: rgba(0, 217, 255, 0.05);
+    }
+
+    .checkbox-item input[type="checkbox"] {
+      width: 20px;
+      height: 20px;
+      margin-top: 2px;
+      cursor: pointer;
+      accent-color: var(--accent);
+      flex-shrink: 0;
+    }
+
+    .checkbox-content {
+      flex: 1;
+    }
+
+    .checkbox-label {
+      display: block;
+      font-weight: 600;
+      color: var(--text-primary);
+      margin-bottom: 4px;
+    }
+
+    .checkbox-description {
+      font-size: 0.9rem;
+      color: var(--text-secondary);
+    }
+
+    .app-config {
+      display: none;
+      margin-top: 20px;
+      padding-top: 20px;
+      border-top: 1px solid var(--border);
+    }
+
+    .app-config.visible {
+      display: block;
+    }
+
+    .config-group {
+      margin-bottom: 20px;
+    }
+
+    .config-group label {
+      font-size: 0.85rem;
+      font-weight: 500;
+    }
+
+    .config-group input {
+      width: 100%;
+      padding: 10px 12px;
+      background: var(--bg-primary);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      color: var(--text-primary);
+      font-family: 'Fira Code', monospace;
+      margin-bottom: 12px;
+    }
+
+    .runtime-config {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 16px;
+    }
+
+    .button-group {
+      display: flex;
+      gap: 12px;
+      justify-content: center;
+      margin-top: 40px;
+    }
+
+    button {
+      padding: 14px 32px;
+      font-weight: 600;
+      font-size: 1rem;
+      border: none;
+      border-radius: 6px;
+      cursor: pointer;
+      transition: all 0.2s ease;
+      font-family: 'Fira Code', monospace;
+    }
+
+    button[type="submit"] {
+      background: linear-gradient(135deg, var(--accent), #06b6d4);
+      color: #000;
+      flex: 1;
+      max-width: 200px;
+    }
+
+    button[type="submit"]:hover {
+      transform: translateY(-2px);
+      box-shadow: 0 8px 16px rgba(0, 217, 255, 0.3);
+    }
+
+    .info-box {
+      background: linear-gradient(135deg, rgba(251, 146, 60, 0.1), rgba(251, 146, 60, 0.05));
+      border: 1px solid rgba(251, 146, 60, 0.3);
+      border-left: 4px solid #f97316;
+      padding: 16px;
+      border-radius: 6px;
+      margin-bottom: 24px;
+      font-size: 0.9rem;
+      color: var(--text-secondary);
+    }
+
+    .progress {
+      display: flex;
+      gap: 8px;
+      margin-bottom: 32px;
+      justify-content: center;
+    }
+
+    .progress-dot {
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+      background: var(--border);
+      transition: all 0.2s ease;
+    }
+
+    .progress-dot.active {
+      background: var(--accent);
+      transform: scale(1.3);
+    }
+
+    .path-hint {
+      font-size: 0.85rem;
+      color: var(--text-muted);
+      margin-top: 4px;
+      font-family: 'Fira Code', monospace;
+    }
+  </style>
+</head>
+<body>
+  <div class="wizard-container">
+    <!-- Header -->
+    <div class="wizard-header">
+      <h1>❯ servarr</h1>
+      <p class="subtitle">Initial Setup Wizard</p>
+    </div>
+
+    <!-- Progress -->
+    <div class="progress">
+      <div class="progress-dot active"></div>
+      <div class="progress-dot"></div>
+      <div class="progress-dot"></div>
+    </div>
+
+    <form method="post" action="/wizard">
+      <!-- Step 1: Select Applications -->
+      <div class="wizard-step">
+        <div class="step-number">1</div>
+        <h2 class="step-title">Select Applications</h2>
+        <p class="step-subtitle">Choose which services to deploy</p>
+
+        <div class="checkbox-group">
+          <!-- Sonarr -->
+          <label class="checkbox-item">
+            <input type="checkbox" name="sonarrEnabled" onchange="toggleAppConfig('sonarr')">
+            <div class="checkbox-content">
+              <div class="checkbox-label">📺 Sonarr</div>
+              <div class="checkbox-description">Automated TV show management with episode tracking and quality enforcement</div>
+            </div>
+          </label>
+
+          <!-- Radarr -->
+          <label class="checkbox-item">
+            <input type="checkbox" name="radarrEnabled" onchange="toggleAppConfig('radarr')">
+            <div class="checkbox-content">
+              <div class="checkbox-label">🎬 Radarr</div>
+              <div class="checkbox-description">Movie acquisition with quality profiles and release monitoring</div>
+            </div>
+          </label>
+
+          <!-- SABnzbd -->
+          <label class="checkbox-item">
+            <input type="checkbox" name="sabnzbdEnabled" onchange="toggleAppConfig('sabnzbd')">
+            <div class="checkbox-content">
+              <div class="checkbox-label">🔽 SABnzbd</div>
+              <div class="checkbox-description">Binary downloader for Usenet newsgroups with built-in NZB processing</div>
+            </div>
+          </label>
+        </div>
+      </div>
+
+      <!-- Step 2: Configure Paths -->
+      <div class="wizard-step">
+        <div class="step-number">2</div>
+        <h2 class="step-title">Configure Paths</h2>
+        <p class="step-subtitle">Set storage locations (WSL paths)</p>
+
+        <div class="info-box">
+          💡 These are paths inside WSL. They're mounted from your Windows folders configured during installation.
+        </div>
+
+        <div class="config-group">
+          <label>Media Root</label>
+          <input type="text" name="mediaRoot" value="/mnt/media" placeholder="/mnt/media">
+          <div class="path-hint">Parent directory for TV and movie libraries</div>
+        </div>
+
+        <div class="config-group">
+          <label>Downloads Root</label>
+          <input type="text" name="downloadsRoot" value="/mnt/downloads" placeholder="/mnt/downloads">
+          <div class="path-hint">Incomplete and complete download staging</div>
+        </div>
+
+        <div class="config-group">
+          <label>Config Root</label>
+          <input type="text" name="configRoot" value="/mnt/config" placeholder="/mnt/config">
+          <div class="path-hint">Application configuration and database files</div>
+        </div>
+
+        <!-- Sonarr Config -->
+        <div id="sonarr-config" class="app-config">
+          <h4 style="color: var(--text-primary); margin-top: 0;">📺 Sonarr Media Path</h4>
+          <div class="config-group">
+            <input type="text" name="sonarrMediaPath" value="/mnt/media/tv" placeholder="/mnt/media/tv">
+            <div class="path-hint">Subdirectory for TV shows</div>
+          </div>
+        </div>
+
+        <!-- Radarr Config -->
+        <div id="radarr-config" class="app-config">
+          <h4 style="color: var(--text-primary); margin-top: 0;">🎬 Radarr Media Path</h4>
+          <div class="config-group">
+            <input type="text" name="radarrMediaPath" value="/mnt/media/movies" placeholder="/mnt/media/movies">
+            <div class="path-hint">Subdirectory for movies</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Step 3: Runtime Settings -->
+      <div class="wizard-step">
+        <div class="step-number">3</div>
+        <h2 class="step-title">Runtime Settings</h2>
+        <p class="step-subtitle">Container environment configuration</p>
+
+        <div class="runtime-config">
+          <div>
+            <label>Timezone</label>
+            <input type="text" name="timezone" value="America/New_York" placeholder="America/New_York">
+          </div>
+          <div>
+            <label>PUID</label>
+            <input type="text" name="puid" value="1000" placeholder="1000">
+          </div>
+          <div>
+            <label>PGID</label>
+            <input type="text" name="pgid" value="1000" placeholder="1000">
+          </div>
+          <div style="opacity: 0; pointer-events: none;"></div>
+        </div>
+
+        <div class="info-box">
+          ℹ️ PUID and PGID should match your user on the host system. Use <code style="color: var(--accent); background: var(--bg-primary); padding: 2px 6px; border-radius: 3px;">id</code> command to check.
+        </div>
+      </div>
+
+      <!-- Submit -->
+      <div class="button-group">
+        <button type="submit">→ Complete Setup</button>
+      </div>
+    </form>
+  </div>
+
+  <script>
+    function toggleAppConfig(appName) {
+      const checkbox = document.querySelector(`input[name="${appName}Enabled"]`);
+      const configDiv = document.getElementById(`${appName}-config`);
+      if (checkbox.checked) {
+        configDiv.classList.add('visible');
+      } else {
+        configDiv.classList.remove('visible');
+      }
+    }
+
+    // Validate at least one app is selected
+    document.querySelector('form').addEventListener('submit', function(e) {
+      const sonarr = document.querySelector('input[name="sonarrEnabled"]').checked;
+      const radarr = document.querySelector('input[name="radarrEnabled"]').checked;
+      const sabnzbd = document.querySelector('input[name="sabnzbdEnabled"]').checked;
+
+      if (!sonarr && !radarr && !sabnzbd) {
+        e.preventDefault();
+        alert('⚠️ Please select at least one application to deploy');
+        return false;
+      }
+    });
+
+    // Focus on first input
+    document.querySelector('input')?.focus();
+  </script>
+</body>
+</html>
