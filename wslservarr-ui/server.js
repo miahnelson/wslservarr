@@ -124,6 +124,37 @@ function ensureDiagnosticsDir() {
   }
 }
 
+function readXmlTagValue(filePath, tagName) {
+  if (!fs.existsSync(filePath)) return '';
+  const text = fs.readFileSync(filePath, 'utf8');
+  const re = new RegExp(`<${tagName}>([^<]+)</${tagName}>`, 'i');
+  const m = text.match(re);
+  return m?.[1]?.trim() || '';
+}
+
+function readIniKeyValue(filePath, keyName) {
+  if (!fs.existsSync(filePath)) return '';
+  const text = fs.readFileSync(filePath, 'utf8');
+  const re = new RegExp(`^\\s*${keyName}\\s*=\\s*(.+)\\s*$`, 'im');
+  const m = text.match(re);
+  return m?.[1]?.trim() || '';
+}
+
+function discoverApiKeysFromMountedConfig() {
+  const found = {};
+
+  const sonarrKey = readXmlTagValue('/mnt/config/sonarr/config.xml', 'ApiKey');
+  if (sonarrKey) found.sonarr = sonarrKey;
+
+  const radarrKey = readXmlTagValue('/mnt/config/radarr/config.xml', 'ApiKey');
+  if (radarrKey) found.radarr = radarrKey;
+
+  const sabKey = readIniKeyValue('/mnt/config/sabnzbd/sabnzbd.ini', 'api_key');
+    if (sabKey) found.sabnzbd = sabKey;
+
+  return found;
+}
+
 async function execForDiagnostics(command, args) {
   try {
     const { stdout, stderr } = await execFileAsync(command, args, { maxBuffer: 1024 * 1024 * 10 });
@@ -917,6 +948,28 @@ app.post('/api/config', (req, res) => {
     res.json({ ok: true, config: next });
   } catch (e) {
     res.status(400).json({ ok: false, error: e.message });
+  }
+});
+
+app.post('/api/discover-keys', (req, res) => {
+  try {
+    const cfg = normalizeConfig(readConfig());
+    const found = discoverApiKeysFromMountedConfig();
+
+    if (found.sonarr) cfg.sonarr.apiKey = found.sonarr;
+    if (found.radarr) cfg.radarr.apiKey = found.radarr;
+    if (found.sabnzbd) cfg.sabnzbd.apiKey = found.sabnzbd;
+
+    writeConfig(cfg);
+
+    const discoveredApps = Object.keys(found);
+    const message = discoveredApps.length
+      ? `Discovered API keys for: ${discoveredApps.join(', ')}`
+      : 'No API keys discovered from mounted app configs.';
+
+    res.json({ ok: true, found, config: cfg, message });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e.message });
   }
 });
 

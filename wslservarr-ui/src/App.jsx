@@ -168,6 +168,20 @@ function App() {
     setMessage(data.message || 'Applied');
   }
 
+  async function discoverApiKeys() {
+    setMessage('');
+    setError('');
+    const res = await fetch('/api/discover-keys', { method: 'POST' });
+    const data = await res.json();
+    if (!res.ok || !data.ok) {
+      setError(data.error || 'API key discovery failed');
+      return;
+    }
+    const next = mergeConfig(data.config || config);
+    setConfig(next);
+    setMessage(data.message || 'API key discovery completed.');
+  }
+
   async function testConnection(appName) {
     setMessage('');
     setError('');
@@ -356,6 +370,7 @@ function App() {
         <div className="row">
           <button onClick={saveConfig} disabled={saving}>{saving ? 'Saving...' : 'Save Settings'}</button>
           <button className="secondary" onClick={applySettings}>Apply to Apps</button>
+          <button className="secondary" onClick={discoverApiKeys}>Auto-Fill API Keys</button>
         </div>
       </section>
     </div>
