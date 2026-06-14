@@ -203,6 +203,12 @@
       <button type="submit" style="width: 100%; padding: 14px; font-size: 1rem;">→ deploy checked services</button>
     </form>
 
+    <form method="post" action="/wizard/restart" class="card" onsubmit="return confirm('Re-open setup wizard? This lets you re-run initial setup.');">
+      <h2>🧭 Setup Wizard</h2>
+      <p class="card-subtitle">Need to run initial setup again? Launch the wizard.</p>
+      <button type="submit" class="secondary" style="width: 100%; padding: 14px; font-size: 1rem;">⟲ start setup wizard</button>
+    </form>
+
     <!-- Compose Editor -->
     <form method="post" action="/compose" class="card">
       <h2>🧩 Compose YAML</h2>

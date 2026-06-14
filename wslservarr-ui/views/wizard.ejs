@@ -43,7 +43,10 @@
         <div class="step-pill" data-step-pill="5">5. Review</div>
       </div>
 
-      <form method="post" action="/wizard" id="wizardForm">
+      <form method="post" action="<%= forceMode ? '/wizard?force=1' : '/wizard' %>" id="wizardForm">
+        <% if (forceMode) { %>
+          <input type="hidden" name="forceMode" value="1" />
+        <% } %>
         <div class="step-panel active" data-step="1">
           <h2>Environment checks</h2>
           <p class="muted">Validate required mounts and Docker availability before continuing.</p>

@@ -435,7 +435,8 @@ function isFirstRun() {
 }
 
 app.get('/wizard', async (req, res) => {
-  if (!isFirstRun()) {
+  const forceMode = req.query.force === '1';
+  if (!isFirstRun() && !forceMode) {
     return res.redirect('/');
   }
 
@@ -444,13 +445,15 @@ app.get('/wizard', async (req, res) => {
   res.render('wizard', {
     config,
     checks,
+    forceMode,
     message: req.query.message || '',
     error: req.query.error || ''
   });
 });
 
 app.post('/wizard', async (req, res) => {
-  if (!isFirstRun()) {
+  const forceMode = req.query.force === '1' || req.body.forceMode === '1';
+  if (!isFirstRun() && !forceMode) {
     return res.redirect('/');
   }
 
@@ -511,6 +514,16 @@ app.post('/wizard', async (req, res) => {
   }
 
   return res.redirect('/?message=Wizard completed! Configure your apps above.');
+});
+
+app.post('/wizard/restart', (req, res) => {
+  const cfg = normalizeConfig(readConfig());
+  cfg.setup = {
+    completed: false,
+    completedAt: null
+  };
+  writeConfig(cfg);
+  res.redirect('/wizard?force=1&message=Setup wizard restarted');
 });
 
 app.get('/api/wizard/checks', async (req, res) => {
