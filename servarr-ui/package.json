@@ -1,0 +1,16 @@
+{
+  "name": "servarr-ui",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Minimal web UI for Sonarr/Radarr/SABnzbd configuration and container control",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "axios": "^1.7.7",
+    "dockerode": "^4.0.2",
+    "ejs": "^3.1.10",
+    "express": "^4.21.1"
+  }
+}

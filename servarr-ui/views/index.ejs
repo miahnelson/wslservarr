@@ -1,0 +1,114 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Servarr UI</title>
+  <link rel="stylesheet" href="/styles.css" />
+</head>
+<body>
+  <div class="container">
+    <h1>Servarr UI</h1>
+    <p class="small">Minimal control plane for Sonarr, Radarr, and SABnzbd.</p>
+
+    <% if (message) { %>
+      <div class="msg ok"><%= message %></div>
+    <% } %>
+    <% if (error) { %>
+      <div class="msg err"><%= error %></div>
+    <% } %>
+
+    <div class="card">
+      <h2>Container Status</h2>
+      <p class="small">Install the core apps first if they are missing.</p>
+      <form method="post" action="/install/apps" style="margin-bottom: 12px;">
+        <button type="submit">Install / Update Sonarr + Radarr + SABnzbd</button>
+      </form>
+      <table>
+        <thead>
+          <tr><th>Name</th><th>Status</th><th>Image</th><th>Actions</th></tr>
+        </thead>
+        <tbody>
+          <% containers.forEach(c => { %>
+            <tr>
+              <td><%= c.name %></td>
+              <td class="<%= c.status === 'running' ? 'status-running' : 'status-stopped' %>"><%= c.status %></td>
+              <td><%= c.image || '-' %></td>
+              <td class="actions">
+                <button class="secondary" onclick="containerAction('<%= c.name %>','start')">Start</button>
+                <button class="secondary" onclick="containerAction('<%= c.name %>','stop')">Stop</button>
+                <button class="secondary" onclick="containerAction('<%= c.name %>','restart')">Restart</button>
+              </td>
+            </tr>
+          <% }) %>
+        </tbody>
+      </table>
+    </div>
+
+    <form method="post" action="/config" class="card">
+      <h2>Connections and Paths</h2>
+      <div class="grid">
+        <div>
+          <label>Sonarr URL</label>
+          <input name="sonarrUrl" value="<%= config.sonarr.url %>" />
+          <label>Sonarr API Key</label>
+          <input name="sonarrApiKey" value="<%= config.sonarr.apiKey %>" />
+          <button formaction="/test/sonarr" formmethod="post" class="secondary" type="submit">Test Sonarr</button>
+        </div>
+        <div>
+          <label>Radarr URL</label>
+          <input name="radarrUrl" value="<%= config.radarr.url %>" />
+          <label>Radarr API Key</label>
+          <input name="radarrApiKey" value="<%= config.radarr.apiKey %>" />
+          <button formaction="/test/radarr" formmethod="post" class="secondary" type="submit">Test Radarr</button>
+        </div>
+        <div>
+          <label>SABnzbd URL</label>
+          <input name="sabUrl" value="<%= config.sabnzbd.url %>" />
+          <label>SABnzbd API Key</label>
+          <input name="sabApiKey" value="<%= config.sabnzbd.apiKey %>" />
+          <button formaction="/test/sabnzbd" formmethod="post" class="secondary" type="submit">Test SABnzbd</button>
+        </div>
+      </div>
+
+      <div class="grid">
+        <div>
+          <label>TV Root Folder (Sonarr)</label>
+          <input name="tvRoot" value="<%= config.paths.tvRoot %>" />
+          <label>Timezone</label>
+          <input name="timezone" value="<%= (config.runtime && config.runtime.timezone) || 'America/New_York' %>" />
+        </div>
+        <div>
+          <label>Movie Root Folder (Radarr)</label>
+          <input name="movieRoot" value="<%= config.paths.movieRoot %>" />
+          <label>PUID</label>
+          <input name="puid" value="<%= (config.runtime && config.runtime.puid) || '1000' %>" />
+          <label>PGID</label>
+          <input name="pgid" value="<%= (config.runtime && config.runtime.pgid) || '1000' %>" />
+        </div>
+        <div>
+          <label>TV Category (SABnzbd)</label>
+          <input name="tvCategory" value="<%= config.sabnzbd.tvCategory %>" />
+          <label>Movie Category (SABnzbd)</label>
+          <input name="movieCategory" value="<%= config.sabnzbd.movieCategory %>" />
+        </div>
+      </div>
+
+      <button type="submit">Save</button>
+      <button formaction="/apply" formmethod="post" type="submit">Apply to Arr Apps</button>
+    </form>
+  </div>
+
+  <script>
+    async function containerAction(name, action) {
+      const r = await fetch(`/container/${name}/${action}`, { method: 'POST' });
+      if (!r.ok) {
+        const body = await r.json().catch(() => ({}));
+        alert(body.error || 'Action failed');
+        return;
+      }
+      location.reload();
+    }
+  </script>
+</body>
+</html>
