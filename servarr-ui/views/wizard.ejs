@@ -8,370 +8,195 @@
   <link href="https://fonts.googleapis.com/css2?family=Fira+Code:wght@400;500;600;700&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="/styles.css" />
   <style>
-    .wizard-container {
-      max-width: 700px;
-      margin: 60px auto;
-      padding: 0 24px;
-    }
-
-    .wizard-header {
-      text-align: center;
-      margin-bottom: 40px;
-    }
-
-    .wizard-header h1 {
-      margin-bottom: 8px;
-    }
-
-    .wizard-step {
-      background: var(--bg-secondary);
-      border: 1px solid var(--border);
-      border-radius: 8px;
-      padding: 40px;
-      margin-bottom: 24px;
-      box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
-    }
-
-    .step-number {
-      display: inline-block;
-      background: linear-gradient(135deg, var(--accent), #06b6d4);
-      color: #000;
-      width: 40px;
-      height: 40px;
-      border-radius: 50%;
-      line-height: 40px;
-      text-align: center;
-      font-weight: 700;
-      margin-bottom: 16px;
-      font-size: 1.2rem;
-    }
-
-    .step-title {
-      font-size: 1.5rem;
-      margin: 16px 0 8px 0;
-      color: var(--text-primary);
-    }
-
-    .step-subtitle {
-      color: var(--text-secondary);
-      margin-bottom: 24px;
-      font-size: 0.95rem;
-    }
-
-    .checkbox-group {
-      display: flex;
-      flex-direction: column;
-      gap: 16px;
-      margin-bottom: 28px;
-    }
-
-    .checkbox-item {
-      display: flex;
-      align-items: flex-start;
-      gap: 12px;
-      padding: 16px;
-      background: var(--bg-tertiary);
-      border: 1px solid var(--border);
-      border-radius: 6px;
-      cursor: pointer;
-      transition: all 0.2s ease;
-    }
-
-    .checkbox-item:hover {
-      border-color: var(--accent);
-      background: rgba(0, 217, 255, 0.05);
-    }
-
-    .checkbox-item input[type="checkbox"] {
-      width: 20px;
-      height: 20px;
-      margin-top: 2px;
-      cursor: pointer;
-      accent-color: var(--accent);
-      flex-shrink: 0;
-    }
-
-    .checkbox-content {
-      flex: 1;
-    }
-
-    .checkbox-label {
-      display: block;
-      font-weight: 600;
-      color: var(--text-primary);
-      margin-bottom: 4px;
-    }
-
-    .checkbox-description {
-      font-size: 0.9rem;
-      color: var(--text-secondary);
-    }
-
-    .app-config {
-      display: none;
-      margin-top: 20px;
-      padding-top: 20px;
-      border-top: 1px solid var(--border);
-    }
-
-    .app-config.visible {
-      display: block;
-    }
-
-    .config-group {
-      margin-bottom: 20px;
-    }
-
-    .config-group label {
-      font-size: 0.85rem;
-      font-weight: 500;
-    }
-
-    .config-group input {
-      width: 100%;
-      padding: 10px 12px;
-      background: var(--bg-primary);
-      border: 1px solid var(--border);
-      border-radius: 6px;
-      color: var(--text-primary);
-      font-family: 'Fira Code', monospace;
-      margin-bottom: 12px;
-    }
-
-    .runtime-config {
-      display: grid;
-      grid-template-columns: 1fr 1fr;
-      gap: 16px;
-    }
-
-    .button-group {
-      display: flex;
-      gap: 12px;
-      justify-content: center;
-      margin-top: 40px;
-    }
-
-    button {
-      padding: 14px 32px;
-      font-weight: 600;
-      font-size: 1rem;
-      border: none;
-      border-radius: 6px;
-      cursor: pointer;
-      transition: all 0.2s ease;
-      font-family: 'Fira Code', monospace;
-    }
-
-    button[type="submit"] {
-      background: linear-gradient(135deg, var(--accent), #06b6d4);
-      color: #000;
-      flex: 1;
-      max-width: 200px;
-    }
-
-    button[type="submit"]:hover {
-      transform: translateY(-2px);
-      box-shadow: 0 8px 16px rgba(0, 217, 255, 0.3);
-    }
-
-    .info-box {
-      background: linear-gradient(135deg, rgba(251, 146, 60, 0.1), rgba(251, 146, 60, 0.05));
-      border: 1px solid rgba(251, 146, 60, 0.3);
-      border-left: 4px solid #f97316;
-      padding: 16px;
-      border-radius: 6px;
-      margin-bottom: 24px;
-      font-size: 0.9rem;
-      color: var(--text-secondary);
-    }
-
-    .progress {
-      display: flex;
-      gap: 8px;
-      margin-bottom: 32px;
-      justify-content: center;
-    }
-
-    .progress-dot {
-      width: 10px;
-      height: 10px;
-      border-radius: 50%;
-      background: var(--border);
-      transition: all 0.2s ease;
-    }
-
-    .progress-dot.active {
-      background: var(--accent);
-      transform: scale(1.3);
-    }
-
-    .path-hint {
-      font-size: 0.85rem;
-      color: var(--text-muted);
-      margin-top: 4px;
-      font-family: 'Fira Code', monospace;
-    }
+    .wizard-container { max-width: 900px; margin: 40px auto; padding: 0 24px; }
+    .wizard-card { background: var(--bg-secondary); border: 1px solid var(--border); border-radius: 10px; padding: 24px; }
+    .stepper { display: grid; grid-template-columns: repeat(5, 1fr); gap: 8px; margin: 20px 0 24px; }
+    .step-pill { padding: 10px 8px; border: 1px solid var(--border); border-radius: 6px; font-size: .8rem; text-align: center; color: var(--text-secondary); }
+    .step-pill.active { border-color: var(--accent); color: var(--accent); }
+    .step-panel { display: none; }
+    .step-panel.active { display: block; }
+    .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+    .grid-3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 14px; }
+    .actions { margin-top: 20px; display: flex; justify-content: space-between; gap: 10px; }
+    .app-card { padding: 14px; border: 1px solid var(--border); border-radius: 6px; margin-bottom: 10px; }
+    .check-ok { color: #22c55e; }
+    .check-bad { color: #f87171; }
+    .muted { color: var(--text-secondary); }
+    .summary { font-size: .9rem; background: var(--bg-tertiary); padding: 12px; border-radius: 6px; border: 1px solid var(--border); }
+    .inline { display: flex; align-items: center; gap: 8px; }
   </style>
 </head>
 <body>
   <div class="wizard-container">
-    <!-- Header -->
-    <div class="wizard-header">
-      <h1>❯ servarr</h1>
-      <p class="subtitle">Initial Setup Wizard</p>
+    <h1>❯ servarr</h1>
+    <p class="subtitle">Initial setup wizard</p>
+
+    <% if (message) { %><div class="msg ok">✓ <%= message %></div><% } %>
+    <% if (error) { %><div class="msg err">⚠ <%= error %></div><% } %>
+
+    <div class="wizard-card">
+      <div class="stepper">
+        <div class="step-pill active" data-step-pill="1">1. Environment</div>
+        <div class="step-pill" data-step-pill="2">2. Storage</div>
+        <div class="step-pill" data-step-pill="3">3. Services</div>
+        <div class="step-pill" data-step-pill="4">4. Runtime</div>
+        <div class="step-pill" data-step-pill="5">5. Review</div>
+      </div>
+
+      <form method="post" action="/wizard" id="wizardForm">
+        <div class="step-panel active" data-step="1">
+          <h2>Environment checks</h2>
+          <p class="muted">Validate required mounts and Docker availability before continuing.</p>
+          <div id="checksArea">
+            <div class="inline"><span class="<%= checks.dockerSocket ? 'check-ok' : 'check-bad' %>"><%= checks.dockerSocket ? '●' : '●' %></span> Docker socket: <strong><%= checks.dockerSocket ? 'present' : 'missing' %></strong></div>
+            <div class="inline"><span class="<%= checks.dockerResponsive ? 'check-ok' : 'check-bad' %>">●</span> Docker API: <strong><%= checks.dockerResponsive ? 'responsive' : 'unavailable' %></strong></div>
+            <div class="inline"><span class="<%= checks.configMount ? 'check-ok' : 'check-bad' %>">●</span> /mnt/config mount</div>
+            <div class="inline"><span class="<%= checks.mediaMount ? 'check-ok' : 'check-bad' %>">●</span> /mnt/media mount</div>
+            <div class="inline"><span class="<%= checks.downloadsMount ? 'check-ok' : 'check-bad' %>">●</span> /mnt/downloads mount</div>
+          </div>
+          <p class="muted" id="checkErrorText"><%= checks.dockerError || '' %></p>
+        </div>
+
+        <div class="step-panel" data-step="2">
+          <h2>Storage mapping</h2>
+          <p class="muted">Use mounted WSL paths. Defaults match the installer.</p>
+          <div class="grid-3">
+            <div><label>Config Root</label><input name="configRoot" value="<%= config.paths?.configRoot || '/mnt/config' %>" /></div>
+            <div><label>Media Root</label><input name="mediaRoot" value="<%= config.paths.mediaRoot %>" /></div>
+            <div><label>Downloads Root</label><input name="downloadsRoot" value="<%= config.paths.downloadsRoot %>" /></div>
+          </div>
+          <div class="grid-2" style="margin-top:12px;">
+            <div><label>Sonarr Media Path</label><input name="sonarrMediaPath" value="<%= config.sonarr.tvRoot %>" /></div>
+            <div><label>Radarr Media Path</label><input name="radarrMediaPath" value="<%= config.radarr.movieRoot %>" /></div>
+          </div>
+        </div>
+
+        <div class="step-panel" data-step="3">
+          <h2>Select services</h2>
+          <p class="muted">Pick at least one service and set host ports.</p>
+          <label class="app-card inline"><input type="checkbox" name="sonarrEnabled" <%= config.sonarr.enabled ? 'checked' : '' %> /> 📺 Sonarr</label>
+          <div class="grid-3" style="margin-bottom:12px;">
+            <div><label>Sonarr Port</label><input name="sonarrPort" value="<%= config.sonarr.port %>" /></div>
+            <div><label>Sonarr URL</label><input value="http://sonarr:8989" disabled /></div>
+          </div>
+
+          <label class="app-card inline"><input type="checkbox" name="radarrEnabled" <%= config.radarr.enabled ? 'checked' : '' %> /> 🎬 Radarr</label>
+          <div class="grid-3" style="margin-bottom:12px;">
+            <div><label>Radarr Port</label><input name="radarrPort" value="<%= config.radarr.port %>" /></div>
+            <div><label>Radarr URL</label><input value="http://radarr:7878" disabled /></div>
+          </div>
+
+          <label class="app-card inline"><input type="checkbox" name="sabnzbdEnabled" <%= config.sabnzbd.enabled ? 'checked' : '' %> /> 🔽 SABnzbd</label>
+          <div class="grid-3">
+            <div><label>SABnzbd Port</label><input name="sabnzbdPort" value="<%= config.sabnzbd.port %>" /></div>
+            <div><label>TV Category</label><input name="tvCategory" value="<%= config.sabnzbd.tvCategory %>" /></div>
+            <div><label>Movie Category</label><input name="movieCategory" value="<%= config.sabnzbd.movieCategory %>" /></div>
+          </div>
+        </div>
+
+        <div class="step-panel" data-step="4">
+          <h2>Runtime defaults</h2>
+          <p class="muted">These are written to container environment variables.</p>
+          <div class="grid-3">
+            <div><label>Timezone</label><input name="timezone" value="<%= config.runtime.timezone %>" /></div>
+            <div><label>PUID</label><input name="puid" value="<%= config.runtime.puid %>" /></div>
+            <div><label>PGID</label><input name="pgid" value="<%= config.runtime.pgid %>" /></div>
+          </div>
+        </div>
+
+        <div class="step-panel" data-step="5">
+          <h2>Review & apply</h2>
+          <p class="muted">Validate inputs, then save wizard config.</p>
+          <div id="validationBox" class="summary">No validation run yet.</div>
+          <div style="margin-top:12px;" class="summary" id="summaryBox"></div>
+        </div>
+
+        <div class="actions">
+          <button type="button" class="secondary" id="backBtn">← back</button>
+          <div style="display:flex; gap:10px;">
+            <button type="button" class="secondary" id="validateBtn" style="display:none;">validate</button>
+            <button type="button" id="nextBtn">next →</button>
+            <button type="submit" id="finishBtn" style="display:none;">✓ complete setup</button>
+          </div>
+        </div>
+      </form>
     </div>
-
-    <!-- Progress -->
-    <div class="progress">
-      <div class="progress-dot active"></div>
-      <div class="progress-dot"></div>
-      <div class="progress-dot"></div>
-    </div>
-
-    <form method="post" action="/wizard">
-      <!-- Step 1: Select Applications -->
-      <div class="wizard-step">
-        <div class="step-number">1</div>
-        <h2 class="step-title">Select Applications</h2>
-        <p class="step-subtitle">Choose which services to deploy</p>
-
-        <div class="checkbox-group">
-          <!-- Sonarr -->
-          <label class="checkbox-item">
-            <input type="checkbox" name="sonarrEnabled" onchange="toggleAppConfig('sonarr')">
-            <div class="checkbox-content">
-              <div class="checkbox-label">📺 Sonarr</div>
-              <div class="checkbox-description">Automated TV show management with episode tracking and quality enforcement</div>
-            </div>
-          </label>
-
-          <!-- Radarr -->
-          <label class="checkbox-item">
-            <input type="checkbox" name="radarrEnabled" onchange="toggleAppConfig('radarr')">
-            <div class="checkbox-content">
-              <div class="checkbox-label">🎬 Radarr</div>
-              <div class="checkbox-description">Movie acquisition with quality profiles and release monitoring</div>
-            </div>
-          </label>
-
-          <!-- SABnzbd -->
-          <label class="checkbox-item">
-            <input type="checkbox" name="sabnzbdEnabled" onchange="toggleAppConfig('sabnzbd')">
-            <div class="checkbox-content">
-              <div class="checkbox-label">🔽 SABnzbd</div>
-              <div class="checkbox-description">Binary downloader for Usenet newsgroups with built-in NZB processing</div>
-            </div>
-          </label>
-        </div>
-      </div>
-
-      <!-- Step 2: Configure Paths -->
-      <div class="wizard-step">
-        <div class="step-number">2</div>
-        <h2 class="step-title">Configure Paths</h2>
-        <p class="step-subtitle">Set storage locations (WSL paths)</p>
-
-        <div class="info-box">
-          💡 These are paths inside WSL. They're mounted from your Windows folders configured during installation.
-        </div>
-
-        <div class="config-group">
-          <label>Media Root</label>
-          <input type="text" name="mediaRoot" value="/mnt/media" placeholder="/mnt/media">
-          <div class="path-hint">Parent directory for TV and movie libraries</div>
-        </div>
-
-        <div class="config-group">
-          <label>Downloads Root</label>
-          <input type="text" name="downloadsRoot" value="/mnt/downloads" placeholder="/mnt/downloads">
-          <div class="path-hint">Incomplete and complete download staging</div>
-        </div>
-
-        <div class="config-group">
-          <label>Config Root</label>
-          <input type="text" name="configRoot" value="/mnt/config" placeholder="/mnt/config">
-          <div class="path-hint">Application configuration and database files</div>
-        </div>
-
-        <!-- Sonarr Config -->
-        <div id="sonarr-config" class="app-config">
-          <h4 style="color: var(--text-primary); margin-top: 0;">📺 Sonarr Media Path</h4>
-          <div class="config-group">
-            <input type="text" name="sonarrMediaPath" value="/mnt/media/tv" placeholder="/mnt/media/tv">
-            <div class="path-hint">Subdirectory for TV shows</div>
-          </div>
-        </div>
-
-        <!-- Radarr Config -->
-        <div id="radarr-config" class="app-config">
-          <h4 style="color: var(--text-primary); margin-top: 0;">🎬 Radarr Media Path</h4>
-          <div class="config-group">
-            <input type="text" name="radarrMediaPath" value="/mnt/media/movies" placeholder="/mnt/media/movies">
-            <div class="path-hint">Subdirectory for movies</div>
-          </div>
-        </div>
-      </div>
-
-      <!-- Step 3: Runtime Settings -->
-      <div class="wizard-step">
-        <div class="step-number">3</div>
-        <h2 class="step-title">Runtime Settings</h2>
-        <p class="step-subtitle">Container environment configuration</p>
-
-        <div class="runtime-config">
-          <div>
-            <label>Timezone</label>
-            <input type="text" name="timezone" value="America/New_York" placeholder="America/New_York">
-          </div>
-          <div>
-            <label>PUID</label>
-            <input type="text" name="puid" value="1000" placeholder="1000">
-          </div>
-          <div>
-            <label>PGID</label>
-            <input type="text" name="pgid" value="1000" placeholder="1000">
-          </div>
-          <div style="opacity: 0; pointer-events: none;"></div>
-        </div>
-
-        <div class="info-box">
-          ℹ️ PUID and PGID should match your user on the host system. Use <code style="color: var(--accent); background: var(--bg-primary); padding: 2px 6px; border-radius: 3px;">id</code> command to check.
-        </div>
-      </div>
-
-      <!-- Submit -->
-      <div class="button-group">
-        <button type="submit">→ Complete Setup</button>
-      </div>
-    </form>
   </div>
 
   <script>
-    function toggleAppConfig(appName) {
-      const checkbox = document.querySelector(`input[name="${appName}Enabled"]`);
-      const configDiv = document.getElementById(`${appName}-config`);
-      if (checkbox.checked) {
-        configDiv.classList.add('visible');
-      } else {
-        configDiv.classList.remove('visible');
+    let currentStep = 1;
+    const maxStep = 5;
+
+    function panel(step) { return document.querySelector(`.step-panel[data-step="${step}"]`); }
+    function pill(step) { return document.querySelector(`.step-pill[data-step-pill="${step}"]`); }
+
+    function showStep(step) {
+      currentStep = Math.min(maxStep, Math.max(1, step));
+      for (let i = 1; i <= maxStep; i++) {
+        panel(i).classList.toggle('active', i === currentStep);
+        pill(i).classList.toggle('active', i === currentStep);
       }
+      document.getElementById('backBtn').disabled = currentStep === 1;
+      document.getElementById('nextBtn').style.display = currentStep === maxStep ? 'none' : 'inline-block';
+      document.getElementById('finishBtn').style.display = currentStep === maxStep ? 'inline-block' : 'none';
+      document.getElementById('validateBtn').style.display = currentStep === maxStep ? 'inline-block' : 'none';
+      if (currentStep === 5) renderSummary();
     }
 
-    // Validate at least one app is selected
-    document.querySelector('form').addEventListener('submit', function(e) {
-      const sonarr = document.querySelector('input[name="sonarrEnabled"]').checked;
-      const radarr = document.querySelector('input[name="radarrEnabled"]').checked;
-      const sabnzbd = document.querySelector('input[name="sabnzbdEnabled"]').checked;
+    function getFormDataObject() {
+      const form = document.getElementById('wizardForm');
+      const fd = new FormData(form);
+      return Object.fromEntries(fd.entries());
+    }
 
-      if (!sonarr && !radarr && !sabnzbd) {
-        e.preventDefault();
-        alert('⚠️ Please select at least one application to deploy');
-        return false;
+    async function validateWizard() {
+      const obj = getFormDataObject();
+      const res = await fetch('/api/wizard/validate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(obj)
+      });
+      const data = await res.json();
+      const box = document.getElementById('validationBox');
+      if (!data.ok) {
+        box.innerHTML = `<strong>Validation failed</strong><br>${(data.errors || []).join('<br>')}`;
+        box.style.borderColor = '#ef4444';
+      } else {
+        const warns = (data.warnings || []).length ? `<br><br><strong>Warnings</strong><br>${data.warnings.join('<br>')}` : '';
+        box.innerHTML = `<strong>Validation passed</strong>${warns}`;
+        box.style.borderColor = '#22c55e';
       }
+      return data.ok;
+    }
+
+    function renderSummary() {
+      const obj = getFormDataObject();
+      const enabled = ['sonarrEnabled','radarrEnabled','sabnzbdEnabled'].filter(k => obj[k] === 'on').map(k => k.replace('Enabled',''));
+      document.getElementById('summaryBox').innerHTML = `
+        <strong>Services:</strong> ${enabled.join(', ') || 'none'}<br>
+        <strong>Paths:</strong> config=${obj.configRoot || '/mnt/config'}, media=${obj.mediaRoot || '/mnt/media'}, downloads=${obj.downloadsRoot || '/mnt/downloads'}<br>
+        <strong>Ports:</strong> sonarr=${obj.sonarrPort || '8989'}, radarr=${obj.radarrPort || '7878'}, sabnzbd=${obj.sabnzbdPort || '8080'}<br>
+        <strong>Runtime:</strong> TZ=${obj.timezone || 'America/New_York'}, PUID=${obj.puid || '1000'}, PGID=${obj.pgid || '1000'}
+      `;
+    }
+
+    document.getElementById('nextBtn').addEventListener('click', async () => {
+      if (currentStep === 5) return;
+      if (currentStep === 1) {
+        const failed = [...document.querySelectorAll('#checksArea .check-bad')].length > 0;
+        if (failed && !confirm('Some checks failed. Continue anyway?')) return;
+      }
+      showStep(currentStep + 1);
+    });
+    document.getElementById('backBtn').addEventListener('click', () => showStep(currentStep - 1));
+    document.getElementById('validateBtn').addEventListener('click', validateWizard);
+
+    document.getElementById('wizardForm').addEventListener('submit', async (e) => {
+      const ok = await validateWizard();
+      if (!ok) e.preventDefault();
     });
 
-    // Focus on first input
-    document.querySelector('input')?.focus();
+    showStep(1);
   </script>
 </body>
 </html>

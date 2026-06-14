@@ -40,9 +40,13 @@ function Invoke-Wsl {
     $normalizedScript = "export HOME=/root`n$normalizedScript"
     $encoded = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($normalizedScript))
     $cmd = "echo $encoded | base64 -d | bash"
-    & wsl -d $Distro -u root -- bash -lc $cmd
+    $output = & wsl -d $Distro -u root -- bash -lc $cmd 2>&1
+    if ($output) {
+        $output | ForEach-Object { Write-Host $_ }
+    }
     if ($LASTEXITCODE -ne 0) {
-        throw "WSL command failed in distro '$Distro' with exit code $LASTEXITCODE"
+        $details = if ($output) { ($output | Out-String).Trim() } else { "(no output)" }
+        throw "WSL command failed in distro '$Distro' with exit code $LASTEXITCODE`n$details"
     }
 }
 
@@ -321,13 +325,13 @@ usermod -aG docker $LinuxUser
 
 rm -rf /root/.docker /home/$LinuxUser/.docker
 mkdir -p /root/.docker /home/$LinuxUser/.docker
-printf '%s\n' '{\"auths\":{}}' >/root/.docker/config.json
-printf '%s\n' '{\"auths\":{}}' >/home/`$LinuxUser/.docker/config.json
-chown -R `$LinuxUser:`$LinuxUser /home/`$LinuxUser/.docker
+printf '%s\n' '{"auths":{}}' >/root/.docker/config.json
+printf '%s\n' '{"auths":{}}' >/home/${LinuxUser}/.docker/config.json
+chown -R ${LinuxUser}:${LinuxUser} /home/${LinuxUser}/.docker
 
 mkdir -p /opt/servarr
 mkdir -p /mnt/config/servarr-ui
-chown -R `$LinuxUser:`$LinuxUser /opt/servarr /mnt/config /mnt/media /mnt/downloads
+chown -R ${LinuxUser}:${LinuxUser} /opt/servarr /mnt/config /mnt/media /mnt/downloads
 
 cat >/opt/servarr/compose.yml <<'COMPOSEOF'
 services:
@@ -342,6 +346,9 @@ services:
       - /var/run/docker.sock:/var/run/docker.sock
       - /mnt/config/servarr-ui:/data
       - /opt/servarr:/opt/servarr
+            - /mnt/config:/mnt/config
+            - /mnt/media:/mnt/media
+            - /mnt/downloads:/mnt/downloads
     ports:
       - "5055:5055"
     restart: unless-stopped
@@ -365,6 +372,17 @@ systemctl set-default multi-user.target
     # Keep the distro running by ensuring docker and systemd are active
     Write-Host "Starting distro services..."
     & wsl -d $DistroName -u root -- systemctl start docker
+
+    # Normalize Docker client config JSON files (handles older malformed installs)
+    $dockerConfigRepair = @(
+        'set -euo pipefail',
+        'mkdir -p /root/.docker /home/servarr/.docker',
+        'printf ''%s\n'' ''{"auths":{}}'' >/root/.docker/config.json',
+        'printf ''%s\n'' ''{"auths":{}}'' >/home/servarr/.docker/config.json',
+        'chown -R servarr:servarr /home/servarr/.docker'
+    ) -join "`n"
+    Invoke-WslRoot -Distro $DistroName -Script $dockerConfigRepair
+
     Start-Sleep -Seconds 2
     
     # Verify containers are running
@@ -421,8 +439,11 @@ elseif ($Action -eq "Update") {
         '      - CONFIG_PATH=/data/config.json',
         '    volumes:',
         '      - /var/run/docker.sock:/var/run/docker.sock',
-        '      - /srv/config/servarr-ui:/data',
+        '      - /mnt/config/servarr-ui:/data',
         '      - /opt/servarr:/opt/servarr',
+        '      - /mnt/config:/mnt/config',
+        '      - /mnt/media:/mnt/media',
+        '      - /mnt/downloads:/mnt/downloads',
         '    ports:',
         '      - "5055:5055"',
         '    restart: unless-stopped',
@@ -432,6 +453,15 @@ elseif ($Action -eq "Update") {
     $bashScript = $bashScriptLines -join [System.Environment]::NewLine
     $encoded = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($bashScript))
     & wsl -d $DistroName -u root -- bash -c "echo $encoded | base64 -d | bash"
+
+    $dockerConfigRepair = @(
+        'set -euo pipefail',
+        'mkdir -p /root/.docker /home/servarr/.docker',
+        'printf ''%s\n'' ''{"auths":{}}'' >/root/.docker/config.json',
+        'printf ''%s\n'' ''{"auths":{}}'' >/home/servarr/.docker/config.json',
+        'chown -R servarr:servarr /home/servarr/.docker'
+    ) -join "`n"
+    Invoke-WslRoot -Distro $DistroName -Script $dockerConfigRepair
 
     Write-Host "[3/4] Building and starting custom UI..."
     & wsl -d $DistroName -- bash -lc "cd /opt/servarr && docker compose up -d --build servarr_ui"
