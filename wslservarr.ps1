@@ -1,6 +1,6 @@
 ﻿[CmdletBinding(SupportsShouldProcess = $true)]
 param(
-    [ValidateSet("Setup", "Uninstall", "Update", "Reinstall")]
+    [ValidateSet("Run", "Setup", "Uninstall", "Update", "Reinstall")]
     [string]$Action,
 
     # Setup parameters
@@ -64,6 +64,50 @@ function Invoke-WslRoot {
     & wsl -d $Distro -u root -- bash -lc "echo $encoded | base64 -d | bash"
 }
 
+function Start-RunMode {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Distro
+    )
+
+    $existing = wsl -l -q
+    if ($existing -notcontains $Distro) {
+        throw "Distro '$Distro' not found. Run with -Action Setup first."
+    }
+
+    Write-Host "[Run] Ensuring Docker service is running..."
+    & wsl -d $Distro -u root -- systemctl start docker
+
+    Write-Host "[Run] Ensuring UI container is running..."
+    $runScript = @'
+set -euo pipefail
+if [ ! -f /opt/wslservarr/compose.yml ]; then
+  echo "Missing /opt/wslservarr/compose.yml"
+  exit 2
+fi
+
+cd /opt/wslservarr
+docker compose up -d wslservarr_ui
+'@
+    Invoke-Wsl -Distro $Distro -Script $runScript
+
+    Write-Host ""
+    Write-Host "WSLServarr UI: http://localhost:5055" -ForegroundColor Green
+    Write-Host "Script will keep running to keep services warm. Press Ctrl+C to stop." -ForegroundColor Yellow
+    Write-Host ""
+
+    while ($true) {
+        $status = & wsl -d $Distro -- bash -lc "docker ps --format '{{.Names}}\t{{.Status}}' | grep '^wslservarr_ui' || true"
+        $ts = Get-Date -Format "HH:mm:ss"
+        if ([string]::IsNullOrWhiteSpace($status)) {
+            Write-Host "[$ts] wslservarr_ui not running | http://localhost:5055" -ForegroundColor Yellow
+        } else {
+            Write-Host "[$ts] $status | http://localhost:5055" -ForegroundColor DarkGray
+        }
+        Start-Sleep -Seconds 30
+    }
+}
+
 # ============================================================================
 # Action Selection
 # ============================================================================
@@ -73,18 +117,41 @@ if ([string]::IsNullOrWhiteSpace($Action)) {
     Write-Host "=== WSLServarr Manager ===" -ForegroundColor Cyan
     Write-Host ""
     Write-Host "What would you like to do?"
-    Write-Host "  1) Setup    - Install WSLServarr from scratch"
-    Write-Host "  2) Update   - Redeploy UI to existing installation"
-    Write-Host "  3) Uninstall - Remove WSLServarr"
-    Write-Host "  4) Reinstall - Recreate distro and reinstall stack"
+    Write-Host "  1) Run app   - Start/keep UI running (default in 5s)"
+    Write-Host "  2) Setup     - Install WSLServarr from scratch"
+    Write-Host "  3) Update    - Redeploy UI to existing installation"
+    Write-Host "  4) Uninstall - Remove WSLServarr"
+    Write-Host "  5) Reinstall - Recreate distro and reinstall stack"
     Write-Host ""
-    $choice = Read-Host "Enter your choice (1-4)"
+
+    $choice = $null
+    Write-Host "Defaulting to 'Run app' in 5 seconds... Press 1-5 to choose another option." -ForegroundColor Yellow
+    try {
+        $deadline = (Get-Date).AddSeconds(5)
+        while ((Get-Date) -lt $deadline) {
+            if ([Console]::KeyAvailable) {
+                $key = [Console]::ReadKey($true)
+                if ($key.KeyChar -match '^[1-5]$') {
+                    $choice = [string]$key.KeyChar
+                    break
+                }
+            }
+            Start-Sleep -Milliseconds 100
+        }
+    } catch {
+        # Non-interactive terminal fallback
+    }
+
+    if ([string]::IsNullOrWhiteSpace($choice)) {
+        $choice = "1"
+    }
 
     switch ($choice) {
-        "1" { $Action = "Setup" }
-        "2" { $Action = "Update" }
-        "3" { $Action = "Uninstall" }
-        "4" { $Action = "Reinstall" }
+        "1" { $Action = "Run" }
+        "2" { $Action = "Setup" }
+        "3" { $Action = "Update" }
+        "4" { $Action = "Uninstall" }
+        "5" { $Action = "Reinstall" }
         default {
             Write-Host "Invalid choice. Exiting." -ForegroundColor Red
             exit 1
@@ -97,6 +164,11 @@ if ($Action -eq "Reinstall") {
     Write-Host "Reinstall selected: forcing distro recreation and fresh setup..." -ForegroundColor Yellow
     $ForceRecreate = $true
     $Action = "Setup"
+}
+
+if ($Action -eq "Run") {
+    Start-RunMode -Distro $DistroName
+    exit 0
 }
 
 # ============================================================================
@@ -414,6 +486,8 @@ systemctl set-default multi-user.target
     Write-Host "Stack file: /opt/wslservarr/compose.yml"
     Write-Host ""
     Write-Host "Tip: Install Sonarr/Radarr/SABnzbd from the web UI first-run setup page."
+
+    Start-RunMode -Distro $DistroName
 }
 
 # ============================================================================
@@ -495,6 +569,8 @@ fi
 
     Write-Host "[4/4] Done." -ForegroundColor Green
     Write-Host "UI updated: http://localhost:5055"
+
+    Start-RunMode -Distro $DistroName
 }
 
 # ============================================================================

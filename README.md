@@ -15,6 +15,8 @@ Automated WSL2 installer for a media server stack with Sonarr, Radarr, and SABnz
 .\wslservarr.ps1
 ```
 
+When no action is provided, the script defaults to **Run app** after 5 seconds.
+
 The script will:
 1. Ask for a single Windows root folder and create `config`, `media`, `downloads`
 2. Create WSL distro with Docker
@@ -31,6 +33,9 @@ Web UI source repo (default):
 # Setup (interactive)
 .\wslservarr.ps1
 
+# Run app (keep UI running)
+.\wslservarr.ps1 -Action Run
+
 # Update UI only
 .\wslservarr.ps1 -Action Update
 
@@ -43,6 +48,8 @@ Web UI source repo (default):
 # Uninstall
 .\wslservarr.ps1 -Action Uninstall
 ```
+
+After **Setup** and **Update**, the script enters run mode and keeps printing UI status + URL until you press `Ctrl+C`.
 
 ## Folders
 
