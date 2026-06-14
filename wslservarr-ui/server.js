@@ -68,6 +68,21 @@ function setDeployState(patch) {
   emitDeployEvent('state', { state: deployState });
 }
 
+async function retryAsync(fn, attempts = 6, delayMs = 2500) {
+  let lastError;
+  for (let i = 0; i < attempts; i++) {
+    try {
+      return await fn();
+    } catch (e) {
+      lastError = e;
+      if (i < attempts - 1) {
+        await new Promise(resolve => setTimeout(resolve, delayMs));
+      }
+    }
+  }
+  throw lastError;
+}
+
 function runCommandWithProgress(command, args, label, onProgress) {
   return new Promise((resolve, reject) => {
     const child = spawn(command, args, { stdio: ['ignore', 'pipe', 'pipe'] });
@@ -431,6 +446,40 @@ async function upsertArrIndexers(appName, cfg) {
       await client.put(`/api/v3/indexer/${existing.id}`, payload);
     } else {
       await client.post('/api/v3/indexer', payload);
+    }
+  }
+}
+
+async function applyIntegrationsWithProgress(cfg, appName = null, onProgress) {
+  const appTargets = appName && ['sonarr', 'radarr'].includes(appName)
+    ? [appName]
+    : ['sonarr', 'radarr'];
+
+  if (cfg.newshosting?.enabled) {
+    if (onProgress) onProgress('Applying Newshosting server to SABnzbd...');
+    await retryAsync(() => upsertSabNewshostingServer(cfg), 8, 2500);
+  }
+
+  for (const app of appTargets) {
+    const arrCfg = cfg[app];
+    if (!arrCfg?.enabled || !arrCfg?.apiKey) {
+      if (onProgress) onProgress(`Skipping ${app} auto-config (app disabled or API key missing).`);
+      continue;
+    }
+
+    if (onProgress) onProgress(`Applying ${app} root folder...`);
+    await retryAsync(() => ensureRootFolder(app, cfg), 8, 2500);
+
+    if (cfg.sabnzbd?.enabled && cfg.sabnzbd?.apiKey) {
+      if (onProgress) onProgress(`Applying ${app} download client (SABnzbd)...`);
+      await retryAsync(() => upsertArrDownloadClient(app, cfg), 8, 2500);
+    } else if (onProgress) {
+      onProgress(`Skipping ${app} SABnzbd downloader setup (SAB disabled or API key missing).`);
+    }
+
+    if (Array.isArray(cfg.indexers) && cfg.indexers.length) {
+      if (onProgress) onProgress(`Applying ${app} indexers...`);
+      await retryAsync(() => upsertArrIndexers(app, cfg), 8, 2500);
     }
   }
 }
@@ -811,11 +860,16 @@ function startDeployJob(config, appName = null) {
 
   (async () => {
     try {
+      const cfg = normalizeConfig(config);
       if (appName) {
-        await installOrUpdateSingleAppWithProgress(config, appName, pushDeployLog);
+        await installOrUpdateSingleAppWithProgress(cfg, appName, pushDeployLog);
       } else {
-        await installOrUpdateAppsWithProgress(config, pushDeployLog);
+        await installOrUpdateAppsWithProgress(cfg, pushDeployLog);
       }
+
+      pushDeployLog('Running automatic post-deploy app configuration...');
+      await applyIntegrationsWithProgress(cfg, appName, pushDeployLog);
+
       setDeployState({
         running: false,
         finishedAt: new Date().toISOString(),
