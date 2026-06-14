@@ -1,6 +1,6 @@
 # WSLServarr
 
-Automated WSL2 installer for a media server stack with Sonarr, Radarr, and SABnzbd, plus a web UI and mobile API.
+Automated WSL2 installer for a media server stack with Sonarr, Radarr, and SABnzbd, plus a web UI.
 
 ## Prerequisites
 
@@ -79,6 +79,4 @@ wsl -d wslservarr-wsl mount | grep /mnt
 ## Files
 
 - `wslservarr.ps1` — Main installer entrypoint
-- `servarr.ps1` — Backward-compatible installer script
-- `wslservarr-ui/` — Node.js web UI/API
-- `wslservarr-mobile/` — React Native (Expo) mobile app
+- `wslservarr-ui/` — Node.js API + React web UI

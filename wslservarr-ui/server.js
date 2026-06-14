@@ -27,7 +27,6 @@ const deployState = {
 
 app.use(express.static(path.join(__dirname, 'public')));
 app.use(express.static(SPA_DIST_PATH));
-app.use(express.urlencoded({ extended: true }));
 app.use(express.json());
 
 app.use('/api', (req, res, next) => {
@@ -568,81 +567,6 @@ app.get('/wizard', async (req, res) => {
   return sendSpa(res);
 });
 
-app.post('/wizard', async (req, res) => {
-  const forceMode = req.query.force === '1' || req.body.forceMode === '1';
-  if (!isFirstRun() && !forceMode) {
-    return res.redirect('/');
-  }
-
-  const validation = validateWizardPayload(req.body);
-  if (validation.errors.length > 0) {
-    return res.redirect(`/wizard?error=${encodeURIComponent(validation.errors.join(' '))}`);
-  }
-
-  const config = normalizeConfig({
-    sonarr: {
-      enabled: req.body.sonarrEnabled === 'on',
-      url: 'http://sonarr:8989',
-      apiKey: '',
-      port: req.body.sonarrPort || '8989',
-      tvRoot: req.body.sonarrMediaPath || '/mnt/media/tv'
-    },
-    radarr: {
-      enabled: req.body.radarrEnabled === 'on',
-      url: 'http://radarr:7878',
-      apiKey: '',
-      port: req.body.radarrPort || '7878',
-      movieRoot: req.body.radarrMediaPath || '/mnt/media/movies'
-    },
-    sabnzbd: {
-      enabled: req.body.sabnzbdEnabled === 'on',
-      url: 'http://sabnzbd:8080',
-      apiKey: '',
-      port: req.body.sabnzbdPort || '8080',
-      tvCategory: req.body.tvCategory || 'tv',
-      movieCategory: req.body.movieCategory || 'movies'
-    },
-    paths: {
-      mediaRoot: req.body.mediaRoot || '/mnt/media',
-      downloadsRoot: req.body.downloadsRoot || '/mnt/downloads',
-      configRoot: req.body.configRoot || '/mnt/config'
-    },
-    runtime: {
-      timezone: req.body.timezone || 'America/New_York',
-      puid: req.body.puid || '1000',
-      pgid: req.body.pgid || '1000'
-    },
-    setup: {
-      completed: true,
-      completedAt: new Date().toISOString()
-    },
-    composeYaml: ''
-  });
-
-  writeConfig(config);
-
-  if (req.body.installNow === 'on') {
-    try {
-      await installOrUpdateApps(config);
-      return res.redirect('/?message=Wizard completed and selected apps were installed.');
-    } catch (e) {
-      return res.redirect(`/?error=${encodeURIComponent(`Wizard completed, but install failed: ${e.message}`)}`);
-    }
-  }
-
-  return res.redirect('/?message=Wizard completed! Configure your apps above.');
-});
-
-app.post('/wizard/restart', (req, res) => {
-  const cfg = normalizeConfig(readConfig());
-  cfg.setup = {
-    completed: false,
-    completedAt: null
-  };
-  writeConfig(cfg);
-  res.redirect('/wizard?force=1&message=Setup wizard restarted');
-});
-
 app.get('/api/wizard/checks', async (req, res) => {
   try {
     const checks = await getWizardChecks();
@@ -659,23 +583,6 @@ app.post('/api/wizard/validate', (req, res) => {
 
 app.get('/', async (req, res) => {
   return sendSpa(res);
-});
-
-app.post('/config', (req, res) => {
-  const next = buildConfigFromBody(req.body || {});
-  writeConfig(next);
-  res.redirect('/?message=Configuration saved');
-});
-
-app.get('/api/status', async (req, res) => {
-  const checks = await getWizardChecks();
-  const data = await getDashboardData();
-  res.json({ ok: true, ...data, checks });
-});
-
-app.get('/api/config', async (req, res) => {
-  const data = await getDashboardData();
-  res.json({ ok: true, ...data });
 });
 
 app.get('/api/bootstrap', async (req, res) => {
@@ -699,11 +606,6 @@ app.post('/api/config', (req, res) => {
   } catch (e) {
     res.status(400).json({ ok: false, error: e.message });
   }
-});
-
-app.get('/api/compose', (req, res) => {
-  const cfg = normalizeConfig(readConfig());
-  res.json({ ok: true, composeYaml: cfg.composeYaml || buildAppsCompose(cfg) });
 });
 
 app.post('/api/compose', (req, res) => {
@@ -793,28 +695,6 @@ app.post('/api/wizard/restart', (req, res) => {
   res.json({ ok: true });
 });
 
-app.post('/compose', (req, res) => {
-  const cfg = normalizeConfig(readConfig());
-  cfg.composeYaml = typeof req.body.composeYaml === 'string' ? req.body.composeYaml : cfg.composeYaml;
-  writeConfig(cfg);
-  res.redirect('/?message=Compose YAML saved to UI config');
-});
-
-app.post('/test/:appName', async (req, res) => {
-  try {
-    const cfg = readConfig();
-    const appName = req.params.appName;
-    if (appName === 'sonarr') await testArr(cfg.sonarr.url, cfg.sonarr.apiKey);
-    else if (appName === 'radarr') await testArr(cfg.radarr.url, cfg.radarr.apiKey);
-    else if (appName === 'sabnzbd') await testSab(cfg.sabnzbd.url, cfg.sabnzbd.apiKey);
-    else throw new Error('Unknown app');
-
-    res.redirect(`/?message=${encodeURIComponent(`${appName} connection OK`)}`);
-  } catch (e) {
-    res.redirect(`/?error=${encodeURIComponent(e.message)}`);
-  }
-});
-
 app.post('/api/test/:appName', async (req, res) => {
   try {
     const cfg = readConfig();
@@ -827,26 +707,6 @@ app.post('/api/test/:appName', async (req, res) => {
     res.json({ ok: true, message: `${appName} connection OK` });
   } catch (e) {
     res.status(400).json({ ok: false, error: e.message });
-  }
-});
-
-app.post('/apply', async (req, res) => {
-  try {
-    const cfg = readConfig();
-
-    if (cfg.sonarr.enabled && cfg.sonarr.apiKey) {
-      await ensureRootFolder('sonarr', cfg);
-      await upsertArrDownloadClient('sonarr', cfg);
-    }
-
-    if (cfg.radarr.enabled && cfg.radarr.apiKey) {
-      await ensureRootFolder('radarr', cfg);
-      await upsertArrDownloadClient('radarr', cfg);
-    }
-
-    res.redirect('/?message=Applied settings to enabled Arr apps');
-  } catch (e) {
-    res.redirect(`/?error=${encodeURIComponent(`Apply failed: ${e.message}`)}`);
   }
 });
 
@@ -868,30 +728,6 @@ app.post('/api/apply', async (req, res) => {
   } catch (e) {
     res.status(500).json({ ok: false, error: `Apply failed: ${e.message}` });
   }
-});
-
-app.post('/install/apps', async (req, res) => {
-  try {
-    const cfg = normalizeConfig(readConfig());
-    await installOrUpdateApps(cfg);
-    res.redirect('/?message=Installed or updated Sonarr, Radarr, and SABnzbd');
-  } catch (e) {
-    res.redirect(`/?error=${encodeURIComponent(`Install failed: ${e.message}`)}`);
-  }
-});
-
-app.post('/api/install/apps', async (req, res) => {
-  try {
-    const cfg = normalizeConfig(readConfig());
-    await installOrUpdateApps(cfg);
-    res.json({ ok: true, message: 'Installed or updated Sonarr, Radarr, and SABnzbd' });
-  } catch (e) {
-    res.status(500).json({ ok: false, error: `Install failed: ${e.message}` });
-  }
-});
-
-app.get('/api/install/apps/status', (req, res) => {
-  res.json({ ok: true, state: deployState });
 });
 
 app.post('/api/install/apps/start', (req, res) => {
