@@ -6,7 +6,9 @@ param(
     # Setup parameters
     [string]$RootFsTar,
     [string]$TimeZone = "America/New_York",
-    [string]$DataRootPath = "$env:USERPROFILE\WslServarrData",
+    [string]$DataRootPath = "C:\wslservarr",
+    [string]$WebUiRepoUrl = "https://github.com/miahnelson/wslservarr.git",
+    [string]$WebUiRepoBranch = "main",
     [string]$RootFsDownloadUrl = "https://cloud-images.ubuntu.com/wsl/noble/current/ubuntu-noble-wsl-amd64-wsl.rootfs.tar.gz",
     [switch]$AutoDownloadRootFs = $true,
     [switch]$ForceRecreate,
@@ -196,11 +198,6 @@ if ($Action -eq "Setup") {
         throw "RootFS tar not found after resolution: $RootFsTar"
     }
 
-    $uiPath = Join-Path $PSScriptRoot "wslservarr-ui"
-    if (-not (Test-Path -LiteralPath $uiPath)) {
-        throw "Custom UI project not found: $uiPath"
-    }
-
     $distroExists = $false
     $existing = wsl -l -q
     if ($existing -contains $DistroName) {
@@ -265,9 +262,8 @@ chmod 0644 /etc/profile.d/00-wslservarr-homefix.sh
     & wsl --terminate $DistroName
     Start-Sleep -Seconds 2
 
-    Write-Host "[6/8] Copying custom web UI sources into distro..."
-    & wsl -d $DistroName -u root -- bash -lc "mkdir -p /opt/wslservarr"
-    tar -C $PSScriptRoot -cf - wslservarr-ui | wsl -d $DistroName -u root -- bash -lc "tar -xf - -C /opt/wslservarr"
+    Write-Host "[6/8] Preparing web UI source sync from GitHub..."
+    & wsl -d $DistroName -u root -- bash -lc "mkdir -p /opt/wslservarr/src"
 
     Write-Host "[7/8] Mounting Windows folders into WSL..."
     
@@ -314,7 +310,7 @@ set -euo pipefail
 export DEBIAN_FRONTEND=noninteractive
 
 apt-get update
-apt-get install -y ca-certificates curl gnupg lsb-release libsecret-1-0 gnome-keyring
+apt-get install -y ca-certificates curl gnupg lsb-release libsecret-1-0 gnome-keyring git
 
 install -m 0755 -d /etc/apt/keyrings
 curl -fsSL https://download.docker.com/linux/ubuntu/gpg | gpg --dearmor -o /etc/apt/keyrings/docker.gpg
@@ -339,12 +335,22 @@ chown -R ${LinuxUser}:${LinuxUser} /home/${LinuxUser}/.docker
 
 mkdir -p /opt/wslservarr
 mkdir -p /mnt/config/wslservarr-ui
+
+if [ -d /opt/wslservarr/src/.git ]; then
+    git -C /opt/wslservarr/src fetch --depth 1 origin $WebUiRepoBranch
+    git -C /opt/wslservarr/src checkout -B $WebUiRepoBranch origin/$WebUiRepoBranch
+    git -C /opt/wslservarr/src reset --hard origin/$WebUiRepoBranch
+else
+    rm -rf /opt/wslservarr/src
+    git clone --depth 1 --branch $WebUiRepoBranch $WebUiRepoUrl /opt/wslservarr/src
+fi
+
 chown -R ${LinuxUser}:${LinuxUser} /opt/wslservarr /mnt/config /mnt/media /mnt/downloads
 
 cat >/opt/wslservarr/compose.yml <<'COMPOSEOF'
 services:
     wslservarr_ui:
-        build: ./wslservarr-ui
+        build: ./src/wslservarr-ui
         container_name: wslservarr_ui
         environment:
             - PORT=5055
@@ -415,19 +421,32 @@ systemctl set-default multi-user.target
 # ============================================================================
 
 elseif ($Action -eq "Update") {
-    $uiPath = Join-Path $PSScriptRoot "wslservarr-ui"
-    if (-not (Test-Path -LiteralPath $uiPath)) {
-        throw "Custom UI project not found: $uiPath"
-    }
-
     $existing = wsl -l -q
     if ($existing -notcontains $DistroName) {
         throw "Distro '$DistroName' not found. Run with -Action Setup first."
     }
 
-    Write-Host "[1/4] Copying UI sources..."
-    & wsl -d $DistroName -u root -- bash -lc "mkdir -p /opt/wslservarr"
-    tar -C $PSScriptRoot -cf - wslservarr-ui | wsl -d $DistroName -u root -- bash -lc "tar -xf - -C /opt/wslservarr"
+    Write-Host "[1/4] Syncing UI sources from GitHub..."
+    $syncUiScript = @"
+set -euo pipefail
+
+export DEBIAN_FRONTEND=noninteractive
+if ! command -v git >/dev/null 2>&1; then
+    apt-get update
+    apt-get install -y git
+fi
+
+mkdir -p /opt/wslservarr/src
+if [ -d /opt/wslservarr/src/.git ]; then
+    git -C /opt/wslservarr/src fetch --depth 1 origin $WebUiRepoBranch
+    git -C /opt/wslservarr/src checkout -B $WebUiRepoBranch origin/$WebUiRepoBranch
+    git -C /opt/wslservarr/src reset --hard origin/$WebUiRepoBranch
+else
+    rm -rf /opt/wslservarr/src
+    git clone --depth 1 --branch $WebUiRepoBranch $WebUiRepoUrl /opt/wslservarr/src
+fi
+"@
+    Invoke-Wsl -Distro $DistroName -Script $syncUiScript
 
     Write-Host "[2/4] Ensuring compose service exists..."
     # Build bash script by constructing it line by line to avoid PowerShell parsing
@@ -440,7 +459,7 @@ elseif ($Action -eq "Update") {
         "cat >>/opt/wslservarr/compose.yml $lt$lt"+'BASHEOF',
         '',
         '  wslservarr_ui:',
-        '    build: ./wslservarr-ui',
+        '    build: ./src/wslservarr-ui',
         '    container_name: wslservarr_ui',
         '    environment:',
         '      - PORT=5055',

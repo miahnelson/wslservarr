@@ -19,7 +19,11 @@ The script will:
 1. Ask for a single Windows root folder and create `config`, `media`, `downloads`
 2. Create WSL distro with Docker
 3. Mount Windows folders into WSL
-4. Deploy WSLServarr UI to http://localhost:5055
+4. Deploy WSLServarr UI from GitHub to http://localhost:5055
+
+Web UI source repo (default):
+
+`https://github.com/miahnelson/wslservarr.git` (branch `main`)
 
 ## Commands
 
@@ -29,6 +33,9 @@ The script will:
 
 # Update UI only
 .\wslservarr.ps1 -Action Update
+
+# Use custom repo/branch for UI source
+.\wslservarr.ps1 -Action Update -WebUiRepoUrl https://github.com/miahnelson/wslservarr.git -WebUiRepoBranch main
 
 # Full reinstall
 .\wslservarr.ps1 -Action Reinstall
@@ -42,9 +49,9 @@ The script will:
 Default Windows folders created and mounted into WSL:
 
 ```
-C:\Users\<You>\WslServarrData\config     → /mnt/config
-C:\Users\<You>\WslServarrData\media      → /mnt/media
-C:\Users\<You>\WslServarrData\downloads  → /mnt/downloads
+C:\wslservarr\config     → /mnt/config
+C:\wslservarr\media      → /mnt/media
+C:\wslservarr\downloads  → /mnt/downloads
 ```
 
 ## Web Interfaces
