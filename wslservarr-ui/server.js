@@ -341,74 +341,6 @@ async function getDashboardData() {
   return { config, containers };
 }
 
-async function getWizardChecks() {
-  const checks = {
-    dockerSocket: fs.existsSync('/var/run/docker.sock'),
-    configMount: fs.existsSync('/mnt/config'),
-    mediaMount: fs.existsSync('/mnt/media'),
-    downloadsMount: fs.existsSync('/mnt/downloads'),
-    composeBaseExists: fs.existsSync('/opt/wslservarr/compose.yml'),
-    dockerResponsive: false,
-    dockerError: ''
-  };
-
-  try {
-    await withTimeout(docker.ping(), 3000, 'docker.ping');
-    checks.dockerResponsive = true;
-  } catch (e) {
-    checks.dockerError = e.message;
-  }
-
-  return checks;
-}
-
-function validateWizardPayload(body) {
-  const errors = [];
-  const warnings = [];
-
-  const sonarrEnabled = body.sonarrEnabled === 'on';
-  const radarrEnabled = body.radarrEnabled === 'on';
-  const sabnzbdEnabled = body.sabnzbdEnabled === 'on';
-
-  if (!sonarrEnabled && !radarrEnabled && !sabnzbdEnabled) {
-    errors.push('Select at least one application.');
-  }
-
-  const mediaRoot = (body.mediaRoot || '/mnt/media').trim();
-  const downloadsRoot = (body.downloadsRoot || '/mnt/downloads').trim();
-  const configRoot = (body.configRoot || '/mnt/config').trim();
-
-  for (const [name, value] of [['Media Root', mediaRoot], ['Downloads Root', downloadsRoot], ['Config Root', configRoot]]) {
-    if (!value.startsWith('/mnt/')) {
-      warnings.push(`${name} usually should be under /mnt for mounted Windows storage.`);
-    }
-  }
-
-  const ports = [];
-  if (sonarrEnabled) ports.push({ app: 'sonarr', port: String(body.sonarrPort || '8989').trim() });
-  if (radarrEnabled) ports.push({ app: 'radarr', port: String(body.radarrPort || '7878').trim() });
-  if (sabnzbdEnabled) ports.push({ app: 'sabnzbd', port: String(body.sabnzbdPort || '8080').trim() });
-
-  const seen = new Map();
-  for (const p of ports) {
-    if (!/^\d+$/.test(p.port)) {
-      errors.push(`${p.app} port must be numeric.`);
-      continue;
-    }
-    const num = Number(p.port);
-    if (num < 1 || num > 65535) {
-      errors.push(`${p.app} port must be between 1 and 65535.`);
-      continue;
-    }
-    if (seen.has(p.port)) {
-      errors.push(`Port conflict: ${p.app} and ${seen.get(p.port)} both use ${p.port}.`);
-    } else {
-      seen.set(p.port, p.app);
-    }
-  }
-
-  return { errors, warnings };
-}
 
 function buildAppsCompose(cfg) {
   const tz = cfg.runtime.timezone;
@@ -536,19 +468,6 @@ function upsertServiceYaml(composeYaml, appName, serviceYaml) {
   return `${updated.join('\n').trimEnd()}\n`;
 }
 
-async function installOrUpdateApps(config) {
-  const cfg = normalizeConfig(config);
-  const dirs = ['/srv/config/sonarr', '/srv/config/radarr', '/srv/config/sabnzbd', '/srv/downloads', '/srv/media'];
-  for (const d of dirs) {
-    fs.mkdirSync(d, { recursive: true });
-  }
-
-  const composeYaml = (cfg.composeYaml && cfg.composeYaml.trim()) ? cfg.composeYaml : buildAppsCompose(cfg);
-  fs.writeFileSync(APPS_COMPOSE_PATH, composeYaml);
-  await execFileAsync('docker', ['compose', '-f', APPS_COMPOSE_PATH, 'pull']);
-  await execFileAsync('docker', ['compose', '-f', APPS_COMPOSE_PATH, 'up', '-d']);
-}
-
 async function installOrUpdateAppsWithProgress(config, onProgress) {
   const cfg = normalizeConfig(config);
   const dirs = ['/srv/config/sonarr', '/srv/config/radarr', '/srv/config/sabnzbd', '/srv/downloads', '/srv/media'];
@@ -648,34 +567,12 @@ function startDeployJob(config, appName = null) {
   })();
 }
 
-function isFirstRun() {
-  if (!fs.existsSync(CONFIG_PATH)) return true;
-  const config = normalizeConfig(JSON.parse(fs.readFileSync(CONFIG_PATH, 'utf8')));
-  if (config.setup?.completed) return false;
-  // Backward compatibility for existing installs without setup metadata
-  return !config.sonarr?.enabled && !config.radarr?.enabled && !config.sabnzbd?.enabled;
-}
-
 function sendSpa(res) {
   res.sendFile(path.join(SPA_DIST_PATH, 'index.html'));
 }
 
 app.get('/wizard', async (req, res) => {
-  return sendSpa(res);
-});
-
-app.get('/api/wizard/checks', async (req, res) => {
-  try {
-    const checks = await getWizardChecks();
-    res.json({ ok: true, checks });
-  } catch (e) {
-    res.status(500).json({ ok: false, error: e.message });
-  }
-});
-
-app.post('/api/wizard/validate', (req, res) => {
-  const validation = validateWizardPayload(req.body || {});
-  res.json({ ok: validation.errors.length === 0, ...validation });
+  return res.redirect('/');
 });
 
 app.get('/', async (req, res) => {
@@ -683,15 +580,10 @@ app.get('/', async (req, res) => {
 });
 
 app.get('/api/bootstrap', async (req, res) => {
-  const forceWizard = req.query.forceWizard === '1';
-  const checks = await getWizardChecks();
   const data = await getDashboardData();
   res.json({
     ok: true,
-    ...data,
-    checks,
-    firstRun: isFirstRun(),
-    forceWizard
+    ...data
   });
 });
 
@@ -753,82 +645,6 @@ app.post('/api/yaml/:appName', (req, res) => {
   } catch (e) {
     return res.status(400).json({ ok: false, error: e.message });
   }
-});
-
-app.post('/api/wizard/complete', async (req, res) => {
-  const forceMode = req.query.force === '1' || req.body.forceMode === true;
-  if (!isFirstRun() && !forceMode) {
-    return res.status(400).json({ ok: false, error: 'Wizard is only available during initial setup.' });
-  }
-
-  const validation = validateWizardPayload(req.body || {});
-  if (validation.errors.length > 0) {
-    return res.status(400).json({ ok: false, ...validation });
-  }
-
-  const body = req.body || {};
-  const config = normalizeConfig({
-    sonarr: {
-      enabled: body.sonarrEnabled === 'on' || body.sonarrEnabled === true,
-      url: 'http://sonarr:8989',
-      apiKey: '',
-      port: body.sonarrPort || '8989',
-      tvRoot: body.sonarrMediaPath || '/mnt/media/tv'
-    },
-    radarr: {
-      enabled: body.radarrEnabled === 'on' || body.radarrEnabled === true,
-      url: 'http://radarr:7878',
-      apiKey: '',
-      port: body.radarrPort || '7878',
-      movieRoot: body.radarrMediaPath || '/mnt/media/movies'
-    },
-    sabnzbd: {
-      enabled: body.sabnzbdEnabled === 'on' || body.sabnzbdEnabled === true,
-      url: 'http://sabnzbd:8080',
-      apiKey: '',
-      port: body.sabnzbdPort || '8080',
-      tvCategory: body.tvCategory || 'tv',
-      movieCategory: body.movieCategory || 'movies'
-    },
-    paths: {
-      mediaRoot: body.mediaRoot || '/mnt/media',
-      downloadsRoot: body.downloadsRoot || '/mnt/downloads',
-      configRoot: body.configRoot || '/mnt/config'
-    },
-    runtime: {
-      timezone: body.timezone || 'America/New_York',
-      puid: body.puid || '1000',
-      pgid: body.pgid || '1000'
-    },
-    setup: {
-      completed: true,
-      completedAt: new Date().toISOString()
-    },
-    composeYaml: typeof body.composeYaml === 'string' ? body.composeYaml : ''
-  });
-
-  writeConfig(config);
-
-  if (body.installNow === true || body.installNow === 'on') {
-    try {
-      await installOrUpdateApps(config);
-      return res.json({ ok: true, installed: true });
-    } catch (e) {
-      return res.status(500).json({ ok: false, error: `Wizard completed, but install failed: ${e.message}` });
-    }
-  }
-
-  return res.json({ ok: true, installed: false });
-});
-
-app.post('/api/wizard/restart', (req, res) => {
-  const cfg = normalizeConfig(readConfig());
-  cfg.setup = {
-    completed: false,
-    completedAt: null
-  };
-  writeConfig(cfg);
-  res.json({ ok: true });
 });
 
 app.post('/api/test/:appName', async (req, res) => {
