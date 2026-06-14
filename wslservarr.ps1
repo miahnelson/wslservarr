@@ -92,11 +92,15 @@ docker compose up -d wslservarr_ui
     Invoke-Wsl -Distro $Distro -Script $runScript
 
     Write-Host "[Run] Starting keepalive session to prevent WSL from idling out..."
-    $keepAliveArgs = @('-d', $Distro, '-u', 'root', '--', 'bash', '-lc', 'while true; do sleep 3600; done')
+    $keepAliveArgs = "-d $Distro -u root -- bash -lc \"exec tail -f /dev/null\""
     $keepAliveProcess = Start-Process -FilePath 'wsl.exe' -ArgumentList $keepAliveArgs -WindowStyle Hidden -PassThru
 
     Write-Host ""
     Write-Host "WSLServarr UI: http://localhost:5055" -ForegroundColor Green
+    $activeConfigMount = & wsl -d $Distro -u root -- bash -lc "mount | awk '/ on \\/mnt\\/config /{print \$1; exit}'"
+    if (-not [string]::IsNullOrWhiteSpace($activeConfigMount)) {
+        Write-Host "Active config root: $activeConfigMount" -ForegroundColor DarkGray
+    }
     Write-Host "Script will keep running to keep services warm. Press Ctrl+C to stop." -ForegroundColor Yellow
     Write-Host ""
 
