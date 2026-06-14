@@ -203,12 +203,20 @@
       <button type="submit" style="width: 100%; padding: 14px; font-size: 1rem;">→ deploy checked services</button>
     </form>
 
+    <!-- Compose Editor -->
+    <form method="post" action="/compose" class="card">
+      <h2>🧩 Compose YAML</h2>
+      <p class="card-subtitle">Review and edit the app deployment yaml stored in the UI config.</p>
+      <label>compose.apps.yml</label>
+      <textarea name="composeYaml" rows="18" style="width: 100%; font-family: 'Fira Code', monospace; font-size: 0.85rem;"><%= config.composeYaml %></textarea>
+      <button type="submit" style="width: 100%; margin-top: 12px; padding: 14px; font-size: 1rem;">💾 save yaml</button>
+    </form>
+
     <!-- Footer -->
     <div style="text-align: center; color: var(--text-secondary); margin-top: 40px; padding-top: 20px; border-top: 1px solid var(--border); font-size: 0.9rem;">
       <p>wslservarr v1.0 • distributed orchestration framework<br>
       <span style="color: var(--accent);">❯</span> engineered with precision
-      <br>
-      <a href="/wizard" style="color: var(--accent); text-decoration: none; margin-top: 12px; display: inline-block;">⟲ re-run setup wizard</a></p>
+      </p>
     </div>
   </div>
 

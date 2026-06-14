@@ -408,6 +408,9 @@ chown -R ${LinuxUser}:${LinuxUser} /home/${LinuxUser}/.docker
 mkdir -p /opt/wslservarr
 mkdir -p /mnt/config/wslservarr-ui
 
+# Allow root to operate on repo even if ownership differs
+git config --global --add safe.directory /opt/wslservarr/src || true
+
 if [ -d /opt/wslservarr/src/.git ]; then
     git -C /opt/wslservarr/src fetch --depth 1 origin $WebUiRepoBranch
     git -C /opt/wslservarr/src checkout -B $WebUiRepoBranch origin/$WebUiRepoBranch
@@ -511,6 +514,7 @@ if ! command -v git >/dev/null 2>&1; then
 fi
 
 mkdir -p /opt/wslservarr/src
+git config --global --add safe.directory /opt/wslservarr/src || true
 if [ -d /opt/wslservarr/src/.git ]; then
     git -C /opt/wslservarr/src fetch --depth 1 origin $WebUiRepoBranch
     git -C /opt/wslservarr/src checkout -B $WebUiRepoBranch origin/$WebUiRepoBranch

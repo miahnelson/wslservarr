@@ -78,8 +78,10 @@ function ensureConfig() {
       setup: {
         completed: false,
         completedAt: null
-      }
+      },
+      composeYaml: ''
     };
+    sample.composeYaml = buildAppsCompose(normalizeConfig(sample));
     fs.writeFileSync(CONFIG_PATH, JSON.stringify(sample, null, 2));
   }
 }
@@ -90,7 +92,11 @@ function readConfig() {
 }
 
 function writeConfig(config) {
-  fs.writeFileSync(CONFIG_PATH, JSON.stringify(config, null, 2));
+  const next = normalizeConfig(config);
+  if (!next.composeYaml || !String(next.composeYaml).trim()) {
+    next.composeYaml = buildAppsCompose(next);
+  }
+  fs.writeFileSync(CONFIG_PATH, JSON.stringify(next, null, 2));
 }
 
 function apiClient(baseUrl, apiKey) {
@@ -208,12 +214,16 @@ function normalizeConfig(config) {
   next.setup = next.setup || {};
   next.setup.completed = Boolean(next.setup.completed);
   next.setup.completedAt = next.setup.completedAt || null;
+  next.composeYaml = typeof next.composeYaml === 'string' ? next.composeYaml : '';
+  if (!next.composeYaml.trim()) {
+    next.composeYaml = buildAppsCompose(next);
+  }
   return next;
 }
 
 function buildConfigFromBody(body) {
   const prev = normalizeConfig(readConfig());
-  return normalizeConfig({
+  const next = normalizeConfig({
     sonarr: {
       enabled: body.sonarrEnabled === 'on' || body.sonarrEnabled === true,
       url: body.sonarrUrl || prev.sonarr.url || 'http://sonarr:8989',
@@ -246,8 +256,13 @@ function buildConfigFromBody(body) {
       puid: body.puid || '1000',
       pgid: body.pgid || '1000'
     },
-    setup: prev.setup
+    setup: prev.setup,
+    composeYaml: typeof body.composeYaml === 'string' ? body.composeYaml : prev.composeYaml
   });
+  if (!next.composeYaml || !next.composeYaml.trim()) {
+    next.composeYaml = buildAppsCompose(next);
+  }
+  return next;
 }
 
 async function getDashboardData() {
@@ -405,7 +420,8 @@ async function installOrUpdateApps(config) {
     fs.mkdirSync(d, { recursive: true });
   }
 
-  fs.writeFileSync(APPS_COMPOSE_PATH, buildAppsCompose(cfg));
+  const composeYaml = (cfg.composeYaml && cfg.composeYaml.trim()) ? cfg.composeYaml : buildAppsCompose(cfg);
+  fs.writeFileSync(APPS_COMPOSE_PATH, composeYaml);
   await execFileAsync('docker', ['compose', '-f', APPS_COMPOSE_PATH, 'pull']);
   await execFileAsync('docker', ['compose', '-f', APPS_COMPOSE_PATH, 'up', '-d']);
 }
@@ -419,6 +435,10 @@ function isFirstRun() {
 }
 
 app.get('/wizard', async (req, res) => {
+  if (!isFirstRun()) {
+    return res.redirect('/');
+  }
+
   const config = normalizeConfig(readConfig());
   const checks = await getWizardChecks();
   res.render('wizard', {
@@ -429,7 +449,11 @@ app.get('/wizard', async (req, res) => {
   });
 });
 
-app.post('/wizard', (req, res) => {
+app.post('/wizard', async (req, res) => {
+  if (!isFirstRun()) {
+    return res.redirect('/');
+  }
+
   const validation = validateWizardPayload(req.body);
   if (validation.errors.length > 0) {
     return res.redirect(`/wizard?error=${encodeURIComponent(validation.errors.join(' '))}`);
@@ -471,11 +495,22 @@ app.post('/wizard', (req, res) => {
     setup: {
       completed: true,
       completedAt: new Date().toISOString()
-    }
+    },
+    composeYaml: ''
   });
 
   writeConfig(config);
-  res.redirect('/?message=Wizard completed! Configure your apps above.');
+
+  if (req.body.installNow === 'on') {
+    try {
+      await installOrUpdateApps(config);
+      return res.redirect('/?message=Wizard completed and selected apps were installed.');
+    } catch (e) {
+      return res.redirect(`/?error=${encodeURIComponent(`Wizard completed, but install failed: ${e.message}`)}`);
+    }
+  }
+
+  return res.redirect('/?message=Wizard completed! Configure your apps above.');
 });
 
 app.get('/api/wizard/checks', async (req, res) => {
@@ -533,6 +568,18 @@ app.post('/api/config', (req, res) => {
   } catch (e) {
     res.status(400).json({ ok: false, error: e.message });
   }
+});
+
+app.get('/api/compose', (req, res) => {
+  const cfg = normalizeConfig(readConfig());
+  res.json({ ok: true, composeYaml: cfg.composeYaml || buildAppsCompose(cfg) });
+});
+
+app.post('/compose', (req, res) => {
+  const cfg = normalizeConfig(readConfig());
+  cfg.composeYaml = typeof req.body.composeYaml === 'string' ? req.body.composeYaml : cfg.composeYaml;
+  writeConfig(cfg);
+  res.redirect('/?message=Compose YAML saved to UI config');
 });
 
 app.post('/test/:appName', async (req, res) => {
