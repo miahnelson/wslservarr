@@ -55,6 +55,13 @@ function App() {
 
   const deployLog = useMemo(() => (deployState.logs || []).join('\n') || 'No deployment output yet.', [deployState]);
 
+  function getAppUrl(appName) {
+    if (appName === 'sonarr') return `http://localhost:${config?.sonarr?.port || 8989}`;
+    if (appName === 'radarr') return `http://localhost:${config?.radarr?.port || 7878}`;
+    if (appName === 'sabnzbd') return `http://localhost:${config?.sabnzbd?.port || 8080}`;
+    return '';
+  }
+
   function update(path, value) {
     setConfig((prev) => {
       const next = structuredClone(prev);
@@ -142,26 +149,53 @@ function App() {
     setMessage('');
     setError('');
     setDeployModalOpen(true);
-    const res = await fetch('/api/install/apps/start', { method: 'POST' });
-    const data = await res.json();
-    if (!res.ok || !data.ok) {
-      setError(data.error || 'Failed to start deployment');
+    if (deployState.running) {
+      setMessage('Deployment already running. Showing live output.');
       return;
     }
-    setDeployState(data.state);
+
+    if (!config.sonarr.enabled && !config.radarr.enabled && !config.sabnzbd.enabled) {
+      setError('No apps are enabled. Enable an app in settings or use per-app deploy from the runtime table.');
+      return;
+    }
+
+    try {
+      const res = await fetch('/api/install/apps/start', { method: 'POST' });
+      const data = await res.json();
+      if (!res.ok || !data.ok) {
+        setError(data.error || 'Failed to start deployment');
+        return;
+      }
+      setDeployState(data.state);
+      setMessage('Deployment started.');
+    } catch (e) {
+      setError(`Failed to start deployment: ${e.message}`);
+      return;
+    }
   }
 
   async function startDeployForApp(appName) {
     setMessage('');
     setError('');
     setDeployModalOpen(true);
-    const res = await fetch(`/api/install/apps/${appName}/start`, { method: 'POST' });
-    const data = await res.json();
-    if (!res.ok || !data.ok) {
-      setError(data.error || `Failed to start ${appName} deployment`);
+    if (deployState.running) {
+      setMessage('Deployment already running. Showing live output.');
       return;
     }
-    setDeployState(data.state);
+
+    try {
+      const res = await fetch(`/api/install/apps/${appName}/start`, { method: 'POST' });
+      const data = await res.json();
+      if (!res.ok || !data.ok) {
+        setError(data.error || `Failed to start ${appName} deployment`);
+        return;
+      }
+      setDeployState(data.state);
+      setMessage(`${appName} deployment started.`);
+    } catch (e) {
+      setError(`Failed to start ${appName} deployment: ${e.message}`);
+      return;
+    }
   }
 
   async function saveCompose() {
@@ -225,11 +259,14 @@ function App() {
       <div className="card">
         <div className="inline-row" style={{ justifyContent: 'space-between', marginBottom: 8 }}>
           <h2 style={{ margin: 0 }}>⚙ Container Runtime</h2>
-          <button className="secondary" onClick={() => setSettingsOpen(true)} title="Settings">⚙ settings</button>
+          <div className="inline-row">
+            <button className="secondary" onClick={() => setDeployModalOpen(true)}>view output</button>
+            <button className="secondary" onClick={() => setSettingsOpen(true)} title="Settings">⚙ settings</button>
+          </div>
         </div>
-        <button onClick={startDeploy} disabled={deployState.running}>{deployState.running ? 'deploying...' : '→ deploy enabled services'}</button>
+        <button onClick={startDeploy}>{deployState.running ? 'deploying... (open output)' : '→ deploy enabled services'}</button>
         <table>
-          <thead><tr><th>Service</th><th>Status</th><th>Image</th><th>Controls</th></tr></thead>
+          <thead><tr><th>Service</th><th>Status</th><th>Image</th><th>URL</th><th>Controls</th></tr></thead>
           <tbody>
             {containers.map((c) => (
               <tr key={c.name}>
@@ -237,10 +274,17 @@ function App() {
                 <td>{c.status}</td>
                 <td>{c.image || '-'}</td>
                 <td>
+                  {c.status === 'running' ? (
+                    <a href={getAppUrl(c.name)} target="_blank" rel="noreferrer">{getAppUrl(c.name)}</a>
+                  ) : (
+                    '-'
+                  )}
+                </td>
+                <td>
                   <button className="secondary" onClick={() => containerAction(c.name, 'start')}>start</button>
                   <button className="secondary" onClick={() => containerAction(c.name, 'stop')}>stop</button>
                   <button className="secondary" onClick={() => containerAction(c.name, 'restart')}>restart</button>
-                  <button className="secondary" onClick={() => startDeployForApp(c.name)} disabled={deployState.running}>deploy</button>
+                  <button className="secondary" onClick={() => startDeployForApp(c.name)}>deploy</button>
                   <button className="secondary" onClick={() => testConnection(c.name)}>test</button>
                   <button className="secondary" onClick={() => openYamlEditor(c.name)}>yaml</button>
                 </td>
