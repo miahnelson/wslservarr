@@ -23,6 +23,9 @@ function App() {
   const [yamlText, setYamlText] = useState('');
   const [yamlSaving, setYamlSaving] = useState(false);
 
+  const runningCount = useMemo(() => containers.filter(c => c.status === 'running').length, [containers]);
+  const missingCount = useMemo(() => containers.filter(c => c.status === 'missing').length, [containers]);
+
   async function loadBootstrap() {
     setLoading(true);
     try {
@@ -145,35 +148,6 @@ function App() {
     setMessage(data.message || 'Applied settings');
   }
 
-  async function startDeploy() {
-    setMessage('');
-    setError('');
-    setDeployModalOpen(true);
-    if (deployState.running) {
-      setMessage('Deployment already running. Showing live output.');
-      return;
-    }
-
-    if (!config.sonarr.enabled && !config.radarr.enabled && !config.sabnzbd.enabled) {
-      setError('No apps are enabled. Enable an app in settings or use per-app deploy from the runtime table.');
-      return;
-    }
-
-    try {
-      const res = await fetch('/api/install/apps/start', { method: 'POST' });
-      const data = await res.json();
-      if (!res.ok || !data.ok) {
-        setError(data.error || 'Failed to start deployment');
-        return;
-      }
-      setDeployState(data.state);
-      setMessage('Deployment started.');
-    } catch (e) {
-      setError(`Failed to start deployment: ${e.message}`);
-      return;
-    }
-  }
-
   async function startDeployForApp(appName) {
     setMessage('');
     setError('');
@@ -248,6 +222,15 @@ function App() {
 
   if (loading) return <div className="container"><h1>❯ wslservarr</h1><p>Loading…</p></div>;
 
+  const deployStatus = deployState.running ? 'running' : deployState.success === false ? 'failed' : deployState.success === true ? 'completed' : 'idle';
+
+  function statusClass(status) {
+    if (status === 'running') return 'status-pill running';
+    if (status === 'missing') return 'status-pill missing';
+    if (String(status || '').startsWith('error')) return 'status-pill error';
+    return 'status-pill stopped';
+  }
+
   return (
     <div className="container">
       <h1>❯ wslservarr</h1>
@@ -255,6 +238,13 @@ function App() {
 
       {message ? <div className="msg ok">✓ {message}</div> : null}
       {error ? <div className="msg err">⚠ {error}</div> : null}
+
+      <div className="runtime-stats">
+        <div className="stat-card"><span>services</span><strong>{containers.length}</strong></div>
+        <div className="stat-card"><span>running</span><strong>{runningCount}</strong></div>
+        <div className="stat-card"><span>missing</span><strong>{missingCount}</strong></div>
+        <div className="stat-card"><span>deploy</span><strong className={`deploy-${deployStatus}`}>{deployStatus}</strong></div>
+      </div>
 
       <div className="card">
         <div className="inline-row" style={{ justifyContent: 'space-between', marginBottom: 8 }}>
@@ -264,29 +254,30 @@ function App() {
             <button className="secondary" onClick={() => setSettingsOpen(true)} title="Settings">⚙ settings</button>
           </div>
         </div>
-        <button onClick={startDeploy}>{deployState.running ? 'deploying... (open output)' : '→ deploy enabled services'}</button>
-        <table>
+        <table className="runtime-table">
           <thead><tr><th>Service</th><th>Status</th><th>Image</th><th>URL</th><th>Controls</th></tr></thead>
           <tbody>
             {containers.map((c) => (
               <tr key={c.name}>
-                <td><strong>{c.name}</strong></td>
-                <td>{c.status}</td>
+                <td><strong className="service-name">{c.name}</strong></td>
+                <td><span className={statusClass(c.status)}>{c.status}</span></td>
                 <td>{c.image || '-'}</td>
                 <td>
                   {c.status === 'running' ? (
-                    <a href={getAppUrl(c.name)} target="_blank" rel="noreferrer">{getAppUrl(c.name)}</a>
+                    <a className="service-url" href={getAppUrl(c.name)} target="_blank" rel="noreferrer">{getAppUrl(c.name)}</a>
                   ) : (
                     '-'
                   )}
                 </td>
                 <td>
-                  <button className="secondary" onClick={() => containerAction(c.name, 'start')}>start</button>
-                  <button className="secondary" onClick={() => containerAction(c.name, 'stop')}>stop</button>
-                  <button className="secondary" onClick={() => containerAction(c.name, 'restart')}>restart</button>
-                  <button className="secondary" onClick={() => startDeployForApp(c.name)}>deploy</button>
-                  <button className="secondary" onClick={() => testConnection(c.name)}>test</button>
-                  <button className="secondary" onClick={() => openYamlEditor(c.name)}>yaml</button>
+                  <div className="action-grid">
+                    <button className="secondary action-btn" onClick={() => containerAction(c.name, 'start')}>start</button>
+                    <button className="secondary action-btn" onClick={() => containerAction(c.name, 'stop')}>stop</button>
+                    <button className="secondary action-btn" onClick={() => containerAction(c.name, 'restart')}>restart</button>
+                    <button className="secondary action-btn accent" onClick={() => startDeployForApp(c.name)}>deploy</button>
+                    <button className="secondary action-btn" onClick={() => testConnection(c.name)}>test</button>
+                    <button className="secondary action-btn" onClick={() => openYamlEditor(c.name)}>yaml</button>
+                  </div>
                 </td>
               </tr>
             ))}

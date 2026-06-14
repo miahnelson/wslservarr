@@ -1,10 +1,108 @@
 .inline-row { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
 textarea.codebox { min-height: 240px; font-size: .85rem; }
 
+.runtime-stats {
+	display: grid;
+	grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+	gap: 12px;
+	margin-bottom: 16px;
+}
+
+.stat-card {
+	background: linear-gradient(180deg, rgba(0, 217, 255, 0.12), rgba(99, 102, 241, 0.08));
+	border: 1px solid rgba(0, 217, 255, 0.25);
+	border-radius: 10px;
+	padding: 12px 14px;
+}
+
+.stat-card span {
+	display: block;
+	color: var(--text-secondary);
+	font-size: .72rem;
+	text-transform: uppercase;
+	letter-spacing: .8px;
+	margin-bottom: 6px;
+}
+
+.stat-card strong {
+	font-size: 1.1rem;
+}
+
+.deploy-running { color: #22c55e; }
+.deploy-failed { color: #ef4444; }
+.deploy-completed { color: #22c55e; }
+.deploy-idle { color: var(--text-secondary); }
+
+.runtime-table td,
+.runtime-table th {
+	vertical-align: middle;
+}
+
+.service-name {
+	font-size: 1.05rem;
+	text-transform: lowercase;
+}
+
+.status-pill {
+	display: inline-block;
+	border-radius: 999px;
+	padding: 4px 10px;
+	font-size: .78rem;
+	font-weight: 600;
+	letter-spacing: .3px;
+	border: 1px solid var(--border);
+}
+
+.status-pill.running {
+	color: #22c55e;
+	border-color: rgba(34, 197, 94, .35);
+	background: rgba(34, 197, 94, .1);
+}
+
+.status-pill.missing,
+.status-pill.stopped {
+	color: #f59e0b;
+	border-color: rgba(245, 158, 11, .35);
+	background: rgba(245, 158, 11, .1);
+}
+
+.status-pill.error {
+	color: #ef4444;
+	border-color: rgba(239, 68, 68, .35);
+	background: rgba(239, 68, 68, .1);
+}
+
+.service-url {
+	color: var(--accent);
+	font-weight: 600;
+}
+
+.action-grid {
+	display: grid;
+	grid-template-columns: repeat(3, minmax(80px, 1fr));
+	gap: 8px;
+}
+
+.action-btn {
+	margin: 0;
+	padding: 10px 12px;
+	font-size: .85rem;
+}
+
+.action-btn.accent {
+	border-color: rgba(0, 217, 255, .45);
+	color: var(--accent);
+}
+
+.action-btn.accent:hover {
+	box-shadow: 0 0 0 2px rgba(0, 217, 255, .12);
+}
+
 .modal-backdrop {
 	position: fixed;
 	inset: 0;
-	background: rgba(2, 6, 23, 0.78);
+	background: rgba(2, 6, 23, 0.8);
+	backdrop-filter: blur(2px);
 	display: flex;
 	align-items: center;
 	justify-content: center;
@@ -15,10 +113,10 @@ textarea.codebox { min-height: 240px; font-size: .85rem; }
 .modal-card {
 	width: min(860px, 100%);
 	background: var(--bg-secondary);
-	border: 1px solid var(--border);
+	border: 1px solid rgba(0, 217, 255, 0.24);
 	border-radius: 10px;
 	padding: 20px;
-	box-shadow: 0 10px 30px rgba(0, 0, 0, 0.35);
+	box-shadow: 0 18px 46px rgba(0, 0, 0, 0.45);
 }
 
 .modal-card.modal-large {
