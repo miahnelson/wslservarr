@@ -1,6 +1,6 @@
 ﻿[CmdletBinding(SupportsShouldProcess = $true)]
 param(
-    [ValidateSet("Setup", "Uninstall", "Update")]
+    [ValidateSet("Setup", "Uninstall", "Update", "Reinstall")]
     [string]$Action,
 
     # Setup parameters
@@ -74,19 +74,27 @@ if ([string]::IsNullOrWhiteSpace($Action)) {
     Write-Host "  1) Setup    - Install Servarr WSL from scratch"
     Write-Host "  2) Update   - Redeploy UI to existing installation"
     Write-Host "  3) Uninstall - Remove Servarr WSL"
+    Write-Host "  4) Reinstall - Recreate distro and reinstall stack"
     Write-Host ""
-    $choice = Read-Host "Enter your choice (1-3)"
+    $choice = Read-Host "Enter your choice (1-4)"
 
     switch ($choice) {
         "1" { $Action = "Setup" }
         "2" { $Action = "Update" }
         "3" { $Action = "Uninstall" }
+        "4" { $Action = "Reinstall" }
         default {
             Write-Host "Invalid choice. Exiting." -ForegroundColor Red
             exit 1
         }
     }
     Write-Host ""
+}
+
+if ($Action -eq "Reinstall") {
+    Write-Host "Reinstall selected: forcing distro recreation and fresh setup..." -ForegroundColor Yellow
+    $ForceRecreate = $true
+    $Action = "Setup"
 }
 
 # ============================================================================
@@ -346,9 +354,9 @@ services:
       - /var/run/docker.sock:/var/run/docker.sock
       - /mnt/config/servarr-ui:/data
       - /opt/servarr:/opt/servarr
-            - /mnt/config:/mnt/config
-            - /mnt/media:/mnt/media
-            - /mnt/downloads:/mnt/downloads
+      - /mnt/config:/mnt/config
+      - /mnt/media:/mnt/media
+      - /mnt/downloads:/mnt/downloads
     ports:
       - "5055:5055"
     restart: unless-stopped
@@ -427,7 +435,7 @@ elseif ($Action -eq "Update") {
     $gt = '>'  # Greater than character
     $bashScriptLines = @(
         'set -euo pipefail',
-        'mkdir -p /srv/config/servarr-ui',
+        'mkdir -p /mnt/config/servarr-ui',
         'if ! grep -q "servarr_ui:" /opt/servarr/compose.yml; then',
         "cat >>/opt/servarr/compose.yml $lt$lt"+'BASHEOF',
         '',
