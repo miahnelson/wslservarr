@@ -478,6 +478,64 @@ function buildAppsCompose(cfg) {
   return compose;
 }
 
+function extractServiceYaml(composeYaml, appName) {
+  const text = String(composeYaml || '');
+  const lines = text.split('\n');
+  const start = lines.findIndex(line => line.trim() === `${appName}:` && line.startsWith('  '));
+  if (start === -1) return '';
+
+  let end = lines.length;
+  for (let i = start + 1; i < lines.length; i++) {
+    if (/^  [A-Za-z0-9_-]+:\s*$/.test(lines[i])) {
+      end = i;
+      break;
+    }
+  }
+
+  return lines.slice(start, end).join('\n').trimEnd();
+}
+
+function upsertServiceYaml(composeYaml, appName, serviceYaml) {
+  const base = String(composeYaml || '').trim() || 'services:\n';
+  const lines = base.split('\n');
+
+  const normalizedBlock = String(serviceYaml || '')
+    .split('\n')
+    .map((line, idx) => {
+      if (idx === 0) {
+        if (line.trim() === `${appName}:`) return `  ${appName}:`;
+        if (line.trim().endsWith(':')) return `  ${line.trim()}`;
+        return `  ${appName}:`;
+      }
+      if (!line.trim()) return '';
+      return line.startsWith('  ') ? line : `    ${line.trimStart()}`;
+    })
+    .join('\n')
+    .trimEnd();
+
+  const hasServices = lines.some(line => line.trim() === 'services:');
+  if (!hasServices) {
+    return `services:\n${normalizedBlock}\n`;
+  }
+
+  const start = lines.findIndex(line => line.trim() === `${appName}:` && line.startsWith('  '));
+  if (start === -1) {
+    const out = `${base.trimEnd()}\n${normalizedBlock}\n`;
+    return out;
+  }
+
+  let end = lines.length;
+  for (let i = start + 1; i < lines.length; i++) {
+    if (/^  [A-Za-z0-9_-]+:\s*$/.test(lines[i])) {
+      end = i;
+      break;
+    }
+  }
+
+  const updated = [...lines.slice(0, start), ...normalizedBlock.split('\n'), ...lines.slice(end)];
+  return `${updated.join('\n').trimEnd()}\n`;
+}
+
 async function installOrUpdateApps(config) {
   const cfg = normalizeConfig(config);
   const dirs = ['/srv/config/sonarr', '/srv/config/radarr', '/srv/config/sabnzbd', '/srv/downloads', '/srv/media'];
@@ -655,6 +713,45 @@ app.post('/api/compose', (req, res) => {
     res.json({ ok: true, composeYaml: cfg.composeYaml });
   } catch (e) {
     res.status(400).json({ ok: false, error: e.message });
+  }
+});
+
+app.get('/api/yaml/:appName', (req, res) => {
+  const appName = req.params.appName;
+  if (!TARGET_CONTAINERS.includes(appName)) {
+    return res.status(400).json({ ok: false, error: 'Unknown app' });
+  }
+
+  const cfg = normalizeConfig(readConfig());
+  const composeYaml = (cfg.composeYaml && cfg.composeYaml.trim()) ? cfg.composeYaml : buildAppsCompose(cfg);
+  let serviceYaml = extractServiceYaml(composeYaml, appName);
+  if (!serviceYaml) {
+    serviceYaml = extractServiceYaml(buildAppsCompose(cfg), appName);
+  }
+
+  return res.json({ ok: true, appName, serviceYaml });
+});
+
+app.post('/api/yaml/:appName', (req, res) => {
+  try {
+    const appName = req.params.appName;
+    if (!TARGET_CONTAINERS.includes(appName)) {
+      return res.status(400).json({ ok: false, error: 'Unknown app' });
+    }
+
+    const raw = req.body?.serviceYaml;
+    if (typeof raw !== 'string' || !raw.trim()) {
+      return res.status(400).json({ ok: false, error: 'serviceYaml is required' });
+    }
+
+    const cfg = normalizeConfig(readConfig());
+    const composeYaml = (cfg.composeYaml && cfg.composeYaml.trim()) ? cfg.composeYaml : buildAppsCompose(cfg);
+    cfg.composeYaml = upsertServiceYaml(composeYaml, appName, raw);
+    writeConfig(cfg);
+
+    return res.json({ ok: true, appName, serviceYaml: extractServiceYaml(cfg.composeYaml, appName) });
+  } catch (e) {
+    return res.status(400).json({ ok: false, error: e.message });
   }
 });
 

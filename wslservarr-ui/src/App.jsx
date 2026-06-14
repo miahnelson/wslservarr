@@ -20,6 +20,12 @@ function App() {
   const [error, setError] = useState('');
   const [deployState, setDeployState] = useState({ running: false, logs: [] });
   const [wizardInstallNow, setWizardInstallNow] = useState(true);
+  const [deployModalOpen, setDeployModalOpen] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [yamlOpen, setYamlOpen] = useState(false);
+  const [yamlAppName, setYamlAppName] = useState('');
+  const [yamlText, setYamlText] = useState('');
+  const [yamlSaving, setYamlSaving] = useState(false);
 
   const wizardMode = firstRun || forceWizard;
 
@@ -146,6 +152,7 @@ function App() {
   async function startDeploy() {
     setMessage('');
     setError('');
+    setDeployModalOpen(true);
     const res = await fetch('/api/install/apps/start', { method: 'POST' });
     const data = await res.json();
     if (!res.ok || !data.ok) {
@@ -158,6 +165,7 @@ function App() {
   async function startDeployForApp(appName) {
     setMessage('');
     setError('');
+    setDeployModalOpen(true);
     const res = await fetch(`/api/install/apps/${appName}/start`, { method: 'POST' });
     const data = await res.json();
     if (!res.ok || !data.ok) {
@@ -179,6 +187,40 @@ function App() {
       return;
     }
     setMessage('Compose YAML saved.');
+  }
+
+  async function openYamlEditor(appName) {
+    setError('');
+    setYamlAppName(appName);
+    setYamlText('Loading...');
+    setYamlOpen(true);
+    const res = await fetch(`/api/yaml/${appName}`);
+    const data = await res.json();
+    if (!res.ok || !data.ok) {
+      setYamlText('');
+      setError(data.error || `Failed to load ${appName} yaml`);
+      return;
+    }
+    setYamlText(data.serviceYaml || `  ${appName}:\n    image: lscr.io/linuxserver/${appName}:latest`);
+  }
+
+  async function saveYamlEditor() {
+    if (!yamlAppName) return;
+    setYamlSaving(true);
+    setError('');
+    const res = await fetch(`/api/yaml/${yamlAppName}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ serviceYaml: yamlText })
+    });
+    const data = await res.json();
+    setYamlSaving(false);
+    if (!res.ok || !data.ok) {
+      setError(data.error || `Failed to save ${yamlAppName} yaml`);
+      return;
+    }
+    setYamlText(data.serviceYaml || yamlText);
+    setMessage(`${yamlAppName} yaml saved.`);
   }
 
   async function completeWizard() {
@@ -310,7 +352,10 @@ function App() {
       ) : (
         <>
           <div className="card">
-            <h2>⚙ Container Runtime</h2>
+            <div className="inline-row" style={{ justifyContent: 'space-between', marginBottom: 8 }}>
+              <h2 style={{ margin: 0 }}>⚙ Container Runtime</h2>
+              <button className="secondary" onClick={() => setSettingsOpen(true)} title="Settings">⚙ settings</button>
+            </div>
             <button onClick={startDeploy} disabled={deployState.running}>{deployState.running ? 'deploying...' : '→ deploy enabled services'}</button>
             <table>
               <thead><tr><th>Service</th><th>Status</th><th>Image</th><th>Controls</th></tr></thead>
@@ -326,40 +371,81 @@ function App() {
                       <button className="secondary" onClick={() => containerAction(c.name, 'restart')}>restart</button>
                       <button className="secondary" onClick={() => startDeployForApp(c.name)} disabled={deployState.running}>deploy</button>
                       <button className="secondary" onClick={() => testConnection(c.name)}>test</button>
+                      <button className="secondary" onClick={() => openYamlEditor(c.name)}>yaml</button>
                     </td>
                   </tr>
                 ))}
               </tbody>
             </table>
-            <p className="small">deploy status: {deployState.running ? 'running' : deployState.success === false ? 'failed' : deployState.success === true ? 'completed' : 'idle'}</p>
-            <pre style={{ maxHeight: 260, overflow: 'auto' }}>{deployLog}</pre>
           </div>
+        </>
+      )}
 
-          <div className="card">
-            <h2>Configuration</h2>
+      {deployModalOpen ? (
+        <div className="modal-backdrop">
+          <div className="modal-card">
+            <div className="inline-row" style={{ justifyContent: 'space-between' }}>
+              <h3 style={{ margin: 0 }}>Deployment Output</h3>
+              <button className="secondary" onClick={() => setDeployModalOpen(false)}>close</button>
+            </div>
+            <p className="small">status: {deployState.running ? 'running' : deployState.success === false ? 'failed' : deployState.success === true ? 'completed' : 'idle'}</p>
+            <pre style={{ maxHeight: 420, overflow: 'auto' }}>{deployLog}</pre>
+          </div>
+        </div>
+      ) : null}
+
+      {settingsOpen ? (
+        <div className="modal-backdrop">
+          <div className="modal-card modal-large">
+            <div className="inline-row" style={{ justifyContent: 'space-between' }}>
+              <h3 style={{ margin: 0 }}>Settings</h3>
+              <button className="secondary" onClick={() => setSettingsOpen(false)}>close</button>
+            </div>
+
             <div className="grid-2">
               <div>
                 <label>Media Root</label><input value={config.paths.mediaRoot} onChange={(e) => update('paths.mediaRoot', e.target.value)} />
                 <label>Downloads Root</label><input value={config.paths.downloadsRoot} onChange={(e) => update('paths.downloadsRoot', e.target.value)} />
+                <label>Config Root</label><input value={config.paths.configRoot || ''} onChange={(e) => update('paths.configRoot', e.target.value)} />
                 <label>Timezone</label><input value={config.runtime.timezone} onChange={(e) => update('runtime.timezone', e.target.value)} />
               </div>
               <div>
                 <label>PUID</label><input value={config.runtime.puid} onChange={(e) => update('runtime.puid', e.target.value)} />
                 <label>PGID</label><input value={config.runtime.pgid} onChange={(e) => update('runtime.pgid', e.target.value)} />
+                <label>Sonarr URL</label><input value={config.sonarr.url} onChange={(e) => update('sonarr.url', e.target.value)} />
+                <label>Radarr URL</label><input value={config.radarr.url} onChange={(e) => update('radarr.url', e.target.value)} />
+                <label>SAB URL</label><input value={config.sabnzbd.url} onChange={(e) => update('sabnzbd.url', e.target.value)} />
               </div>
             </div>
-            <button onClick={saveConfig}>💾 save all settings</button>
-            <button className="success" onClick={applySettings}>✓ apply config</button>
-            <button className="secondary" onClick={restartWizard}>⟲ start setup wizard</button>
-          </div>
 
-          <div className="card">
-            <h2>🧩 Compose YAML</h2>
+            <label>Full Compose YAML</label>
             <textarea className="codebox" value={config.composeYaml || ''} onChange={(e) => update('composeYaml', e.target.value)} />
-            <button onClick={saveCompose}>💾 save yaml</button>
+
+            <div className="inline-row">
+              <button onClick={saveConfig}>💾 save settings</button>
+              <button className="secondary" onClick={saveCompose}>💾 save compose yaml</button>
+              <button className="success" onClick={applySettings}>✓ apply config</button>
+              <button className="secondary" onClick={restartWizard}>⟲ start setup wizard</button>
+            </div>
           </div>
-        </>
-      )}
+        </div>
+      ) : null}
+
+      {yamlOpen ? (
+        <div className="modal-backdrop">
+          <div className="modal-card modal-large">
+            <div className="inline-row" style={{ justifyContent: 'space-between' }}>
+              <h3 style={{ margin: 0 }}>{yamlAppName} YAML</h3>
+              <button className="secondary" onClick={() => setYamlOpen(false)}>close</button>
+            </div>
+            <textarea className="codebox" value={yamlText} onChange={(e) => setYamlText(e.target.value)} />
+            <div className="inline-row">
+              <button onClick={saveYamlEditor} disabled={yamlSaving}>{yamlSaving ? 'saving...' : '💾 save yaml'}</button>
+              <button className="secondary" onClick={() => setYamlOpen(false)}>done</button>
+            </div>
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }
