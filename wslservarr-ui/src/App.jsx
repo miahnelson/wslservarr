@@ -1,9 +1,10 @@
 import React, { useEffect, useMemo, useState } from 'react';
 
 const defaultConfig = {
-  sonarr: { enabled: false, url: 'http://sonarr:8989', apiKey: '', port: '8989', tvRoot: '/mnt/media/tv' },
-  radarr: { enabled: false, url: 'http://radarr:7878', apiKey: '', port: '7878', movieRoot: '/mnt/media/movies' },
+  sonarr: { enabled: false, url: 'http://sonarr:8989', apiKey: '', port: '8989', tvRoot: '/media/tv' },
+  radarr: { enabled: false, url: 'http://radarr:7878', apiKey: '', port: '7878', movieRoot: '/media/movies' },
   sabnzbd: { enabled: false, url: 'http://sabnzbd:8080', apiKey: '', port: '8080', tvCategory: 'tv', movieCategory: 'movies' },
+  jellyfin: { enabled: false, url: 'http://jellyfin:8096', apiKey: '', port: '8096' },
   paths: { mediaRoot: '/mnt/media', downloadsRoot: '/mnt/downloads', configRoot: '/mnt/config' },
   runtime: { timezone: 'America/New_York', puid: '1000', pgid: '1000' },
   composeYaml: ''
@@ -66,6 +67,7 @@ function App() {
     if (appName === 'sonarr') return `http://localhost:${config?.sonarr?.port || 8989}`;
     if (appName === 'radarr') return `http://localhost:${config?.radarr?.port || 7878}`;
     if (appName === 'sabnzbd') return `http://localhost:${config?.sabnzbd?.port || 8080}`;
+    if (appName === 'jellyfin') return `http://localhost:${config?.jellyfin?.port || 8096}`;
     return '';
   }
 
@@ -100,6 +102,10 @@ function App() {
       sabPort: config.sabnzbd.port,
       tvCategory: config.sabnzbd.tvCategory,
       movieCategory: config.sabnzbd.movieCategory,
+      jellyfinEnabled: config.jellyfin.enabled,
+      jellyfinUrl: config.jellyfin.url,
+      jellyfinApiKey: config.jellyfin.apiKey,
+      jellyfinPort: config.jellyfin.port,
       mediaRoot: config.paths.mediaRoot,
       downloadsRoot: config.paths.downloadsRoot,
       configRoot: config.paths.configRoot,
@@ -345,6 +351,9 @@ function App() {
                 <label>Sonarr URL</label><input value={config.sonarr.url} onChange={(e) => update('sonarr.url', e.target.value)} />
                 <label>Radarr URL</label><input value={config.radarr.url} onChange={(e) => update('radarr.url', e.target.value)} />
                 <label>SAB URL</label><input value={config.sabnzbd.url} onChange={(e) => update('sabnzbd.url', e.target.value)} />
+                <label>Jellyfin URL</label><input value={config.jellyfin?.url || ''} onChange={(e) => update('jellyfin.url', e.target.value)} />
+                <label>Jellyfin Port</label><input value={config.jellyfin?.port || ''} onChange={(e) => update('jellyfin.port', e.target.value)} />
+                <label>Jellyfin API Key (optional)</label><input value={config.jellyfin?.apiKey || ''} onChange={(e) => update('jellyfin.apiKey', e.target.value)} />
               </div>
             </div>
 

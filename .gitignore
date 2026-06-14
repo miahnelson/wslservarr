@@ -37,3 +37,7 @@ y/
 
 # PowerShell artifacts
 *.ps1xml
+
+# Local monitor/temp files
+run-monitor.*
+*.pid

@@ -13,7 +13,7 @@ const SPA_DIST_PATH = path.join(__dirname, 'dist');
 const PORT = process.env.PORT || 5055;
 const CONFIG_PATH = process.env.CONFIG_PATH || '/data/config.json';
 const DIAGNOSTICS_DIR = process.env.DIAGNOSTICS_DIR || '/data/diagnostics';
-const TARGET_CONTAINERS = ['sonarr', 'radarr', 'sabnzbd'];
+const TARGET_CONTAINERS = ['sonarr', 'radarr', 'sabnzbd', 'jellyfin'];
 const APPS_COMPOSE_PATH = '/opt/wslservarr/compose.apps.yml';
 const execFileAsync = promisify(execFile);
 const deployClients = new Set();
@@ -200,6 +200,12 @@ function ensureConfig() {
         tvCategory: 'tv', 
         movieCategory: 'movies'
       },
+      jellyfin: {
+        enabled: false,
+        url: 'http://jellyfin:8096',
+        apiKey: '',
+        port: 8096
+      },
       paths: { 
         mediaRoot: '/mnt/media',
         downloadsRoot: '/mnt/downloads'
@@ -254,6 +260,20 @@ async function testSab(url, apiKey) {
   });
   if (!res.data || typeof res.data !== 'object') {
     throw new Error('Invalid SABnzbd response');
+  }
+  return { status: 'ok' };
+}
+
+async function testJellyfin(url, apiKey) {
+  const base = `${String(url || '').replace(/\/$/, '')}`;
+  const headers = {};
+  if (apiKey) headers['X-Emby-Token'] = apiKey;
+  const res = await axios.get(`${base}/System/Info/Public`, {
+    timeout: 10000,
+    headers
+  });
+  if (!res.data || typeof res.data !== 'object') {
+    throw new Error('Invalid Jellyfin response');
   }
   return { status: 'ok' };
 }
@@ -340,6 +360,7 @@ function normalizeConfig(config) {
   next.sonarr = next.sonarr || { enabled: false, url: 'http://sonarr:8989', apiKey: '', port: '8989', tvRoot: '/media/tv' };
   next.radarr = next.radarr || { enabled: false, url: 'http://radarr:7878', apiKey: '', port: '7878', movieRoot: '/media/movies' };
   next.sabnzbd = next.sabnzbd || { enabled: false, url: 'http://sabnzbd:8080', apiKey: '', port: '8080', tvCategory: 'tv', movieCategory: 'movies' };
+  next.jellyfin = next.jellyfin || { enabled: false, url: 'http://jellyfin:8096', apiKey: '', port: '8096' };
   next.paths = next.paths || { mediaRoot: '/mnt/media', downloadsRoot: '/mnt/downloads' };
   if (typeof next.sonarr.tvRoot === 'string' && next.sonarr.tvRoot.startsWith('/mnt/media')) {
     next.sonarr.tvRoot = next.sonarr.tvRoot.replace('/mnt/media', '/media');
@@ -387,6 +408,12 @@ function buildConfigFromBody(body) {
       port: body.sabPort || '8080',
       tvCategory: body.tvCategory || 'tv',
       movieCategory: body.movieCategory || 'movies'
+    },
+    jellyfin: {
+      enabled: body.jellyfinEnabled === 'on' || body.jellyfinEnabled === true,
+      url: body.jellyfinUrl || prev.jellyfin.url || 'http://jellyfin:8096',
+      apiKey: body.jellyfinApiKey || '',
+      port: body.jellyfinPort || '8096'
     },
     paths: {
       mediaRoot: body.mediaRoot || '/mnt/media',
@@ -484,6 +511,24 @@ function buildAppsCompose(cfg) {
 `;
   }
 
+  if (cfg.jellyfin.enabled) {
+    compose += `  jellyfin:
+    image: lscr.io/linuxserver/jellyfin:latest
+    container_name: jellyfin
+    environment:
+      - PUID=${puid}
+      - PGID=${pgid}
+      - TZ=${tz}
+    volumes:
+      - /mnt/config/jellyfin:/config
+      - ${mediaRoot}:/media
+    ports:
+      - "${cfg.jellyfin.port}:8096"
+    restart: unless-stopped
+
+`;
+  }
+
   return compose;
 }
 
@@ -554,7 +599,7 @@ function applyComposeHotfixes(composeYaml) {
 
 async function installOrUpdateAppsWithProgress(config, onProgress) {
   const cfg = normalizeConfig(config);
-  const dirs = ['/srv/config/sonarr', '/srv/config/radarr', '/srv/config/sabnzbd', '/srv/downloads', '/srv/media'];
+  const dirs = ['/srv/config/sonarr', '/srv/config/radarr', '/srv/config/sabnzbd', '/srv/config/jellyfin', '/srv/downloads', '/srv/media'];
   if (onProgress) onProgress('Preparing app directories...');
   for (const d of dirs) {
     fs.mkdirSync(d, { recursive: true });
@@ -580,7 +625,7 @@ async function installOrUpdateSingleAppWithProgress(config, appName, onProgress)
     throw new Error(`Unknown app: ${appName}`);
   }
 
-  const dirs = ['/srv/config/sonarr', '/srv/config/radarr', '/srv/config/sabnzbd', '/srv/downloads', '/srv/media'];
+  const dirs = ['/srv/config/sonarr', '/srv/config/radarr', '/srv/config/sabnzbd', '/srv/config/jellyfin', '/srv/downloads', '/srv/media'];
   if (onProgress) onProgress(`Preparing directories for ${appName}...`);
   for (const d of dirs) {
     fs.mkdirSync(d, { recursive: true });
@@ -733,11 +778,12 @@ app.post('/api/yaml/:appName', (req, res) => {
 
 app.post('/api/test/:appName', async (req, res) => {
   try {
-    const cfg = readConfig();
+    const cfg = normalizeConfig(readConfig());
     const appName = req.params.appName;
     if (appName === 'sonarr') await testArr(cfg.sonarr.url, cfg.sonarr.apiKey);
     else if (appName === 'radarr') await testArr(cfg.radarr.url, cfg.radarr.apiKey);
     else if (appName === 'sabnzbd') await testSab(cfg.sabnzbd.url, cfg.sabnzbd.apiKey);
+    else if (appName === 'jellyfin') await testJellyfin(cfg.jellyfin.url, cfg.jellyfin.apiKey);
     else throw new Error('Unknown app');
 
     res.json({ ok: true, message: `${appName} connection OK` });
