@@ -12,7 +12,7 @@ const docker = new Docker({ socketPath: '/var/run/docker.sock' });
 const PORT = process.env.PORT || 5055;
 const CONFIG_PATH = process.env.CONFIG_PATH || '/data/config.json';
 const TARGET_CONTAINERS = ['sonarr', 'radarr', 'sabnzbd'];
-const APPS_COMPOSE_PATH = '/opt/servarr/compose.apps.yml';
+const APPS_COMPOSE_PATH = '/opt/wslservarr/compose.apps.yml';
 const execFileAsync = promisify(execFile);
 
 app.set('view engine', 'ejs');
@@ -20,6 +20,14 @@ app.set('views', path.join(__dirname, 'views'));
 app.use(express.static(path.join(__dirname, 'public')));
 app.use(express.urlencoded({ extended: true }));
 app.use(express.json());
+
+app.use('/api', (req, res, next) => {
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Methods', 'GET,POST,PUT,OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+  if (req.method === 'OPTIONS') return res.sendStatus(204);
+  next();
+});
 
 function ensureConfig() {
   if (!fs.existsSync(path.dirname(CONFIG_PATH))) {
@@ -195,13 +203,63 @@ function normalizeConfig(config) {
   return next;
 }
 
+function buildConfigFromBody(body) {
+  const prev = normalizeConfig(readConfig());
+  return normalizeConfig({
+    sonarr: {
+      enabled: body.sonarrEnabled === 'on' || body.sonarrEnabled === true,
+      url: body.sonarrUrl || prev.sonarr.url || 'http://sonarr:8989',
+      apiKey: body.sonarrApiKey || '',
+      port: body.sonarrPort || '8989',
+      tvRoot: body.tvRoot || '/mnt/media/tv'
+    },
+    radarr: {
+      enabled: body.radarrEnabled === 'on' || body.radarrEnabled === true,
+      url: body.radarrUrl || prev.radarr.url || 'http://radarr:7878',
+      apiKey: body.radarrApiKey || '',
+      port: body.radarrPort || '7878',
+      movieRoot: body.movieRoot || '/mnt/media/movies'
+    },
+    sabnzbd: {
+      enabled: body.sabnzbdEnabled === 'on' || body.sabnzbdEnabled === true,
+      url: body.sabUrl || prev.sabnzbd.url || 'http://sabnzbd:8080',
+      apiKey: body.sabApiKey || '',
+      port: body.sabPort || '8080',
+      tvCategory: body.tvCategory || 'tv',
+      movieCategory: body.movieCategory || 'movies'
+    },
+    paths: {
+      mediaRoot: body.mediaRoot || '/mnt/media',
+      downloadsRoot: body.downloadsRoot || '/mnt/downloads',
+      configRoot: body.configRoot || prev.paths.configRoot || '/mnt/config'
+    },
+    runtime: {
+      timezone: body.timezone || 'America/New_York',
+      puid: body.puid || '1000',
+      pgid: body.pgid || '1000'
+    },
+    setup: prev.setup
+  });
+}
+
+async function getDashboardData() {
+  const config = normalizeConfig(readConfig());
+  let containers = [];
+  try {
+    containers = await getContainerStatuses();
+  } catch (e) {
+    containers = TARGET_CONTAINERS.map(name => ({ name, status: `error: ${e.message}` }));
+  }
+  return { config, containers };
+}
+
 async function getWizardChecks() {
   const checks = {
     dockerSocket: fs.existsSync('/var/run/docker.sock'),
     configMount: fs.existsSync('/mnt/config'),
     mediaMount: fs.existsSync('/mnt/media'),
     downloadsMount: fs.existsSync('/mnt/downloads'),
-    composeBaseExists: fs.existsSync('/opt/servarr/compose.yml'),
+    composeBaseExists: fs.existsSync('/opt/wslservarr/compose.yml'),
     dockerResponsive: false,
     dockerError: ''
   };
@@ -432,13 +490,7 @@ app.get('/', async (req, res) => {
     return res.redirect('/wizard');
   }
 
-  const config = normalizeConfig(readConfig());
-  let containers = [];
-  try {
-    containers = await getContainerStatuses();
-  } catch (e) {
-    containers = TARGET_CONTAINERS.map(name => ({ name, status: `error: ${e.message}` }));
-  }
+  const { config, containers } = await getDashboardData();
 
   res.render('index', {
     config,
@@ -449,42 +501,30 @@ app.get('/', async (req, res) => {
 });
 
 app.post('/config', (req, res) => {
-  const next = {
-    sonarr: {
-      enabled: req.body.sonarrEnabled === 'on',
-      url: req.body.sonarrUrl || 'http://sonarr:8989',
-      apiKey: req.body.sonarrApiKey || '',
-      port: req.body.sonarrPort || '8989',
-      tvRoot: req.body.tvRoot || '/mnt/media/tv'
-    },
-    radarr: {
-      enabled: req.body.radarrEnabled === 'on',
-      url: req.body.radarrUrl || 'http://radarr:7878',
-      apiKey: req.body.radarrApiKey || '',
-      port: req.body.radarrPort || '7878',
-      movieRoot: req.body.movieRoot || '/mnt/media/movies'
-    },
-    sabnzbd: {
-      enabled: req.body.sabnzbdEnabled === 'on',
-      url: req.body.sabUrl || 'http://sabnzbd:8080',
-      apiKey: req.body.sabApiKey || '',
-      port: req.body.sabPort || '8080',
-      tvCategory: req.body.tvCategory || 'tv',
-      movieCategory: req.body.movieCategory || 'movies'
-    },
-    paths: {
-      mediaRoot: req.body.mediaRoot || '/mnt/media',
-      downloadsRoot: req.body.downloadsRoot || '/mnt/downloads'
-    },
-    runtime: {
-      timezone: req.body.timezone || 'America/New_York',
-      puid: req.body.puid || '1000',
-      pgid: req.body.pgid || '1000'
-    }
-  };
-
+  const next = buildConfigFromBody(req.body || {});
   writeConfig(next);
   res.redirect('/?message=Configuration saved');
+});
+
+app.get('/api/status', async (req, res) => {
+  const checks = await getWizardChecks();
+  const data = await getDashboardData();
+  res.json({ ok: true, ...data, checks });
+});
+
+app.get('/api/config', async (req, res) => {
+  const data = await getDashboardData();
+  res.json({ ok: true, ...data });
+});
+
+app.post('/api/config', (req, res) => {
+  try {
+    const next = buildConfigFromBody(req.body || {});
+    writeConfig(next);
+    res.json({ ok: true, config: next });
+  } catch (e) {
+    res.status(400).json({ ok: false, error: e.message });
+  }
 });
 
 app.post('/test/:appName', async (req, res) => {
@@ -499,6 +539,21 @@ app.post('/test/:appName', async (req, res) => {
     res.redirect(`/?message=${encodeURIComponent(`${appName} connection OK`)}`);
   } catch (e) {
     res.redirect(`/?error=${encodeURIComponent(e.message)}`);
+  }
+});
+
+app.post('/api/test/:appName', async (req, res) => {
+  try {
+    const cfg = readConfig();
+    const appName = req.params.appName;
+    if (appName === 'sonarr') await testArr(cfg.sonarr.url, cfg.sonarr.apiKey);
+    else if (appName === 'radarr') await testArr(cfg.radarr.url, cfg.radarr.apiKey);
+    else if (appName === 'sabnzbd') await testSab(cfg.sabnzbd.url, cfg.sabnzbd.apiKey);
+    else throw new Error('Unknown app');
+
+    res.json({ ok: true, message: `${appName} connection OK` });
+  } catch (e) {
+    res.status(400).json({ ok: false, error: e.message });
   }
 });
 
@@ -522,6 +577,26 @@ app.post('/apply', async (req, res) => {
   }
 });
 
+app.post('/api/apply', async (req, res) => {
+  try {
+    const cfg = readConfig();
+
+    if (cfg.sonarr.enabled && cfg.sonarr.apiKey) {
+      await ensureRootFolder('sonarr', cfg);
+      await upsertArrDownloadClient('sonarr', cfg);
+    }
+
+    if (cfg.radarr.enabled && cfg.radarr.apiKey) {
+      await ensureRootFolder('radarr', cfg);
+      await upsertArrDownloadClient('radarr', cfg);
+    }
+
+    res.json({ ok: true, message: 'Applied settings to enabled Arr apps' });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: `Apply failed: ${e.message}` });
+  }
+});
+
 app.post('/install/apps', async (req, res) => {
   try {
     const cfg = normalizeConfig(readConfig());
@@ -529,6 +604,16 @@ app.post('/install/apps', async (req, res) => {
     res.redirect('/?message=Installed or updated Sonarr, Radarr, and SABnzbd');
   } catch (e) {
     res.redirect(`/?error=${encodeURIComponent(`Install failed: ${e.message}`)}`);
+  }
+});
+
+app.post('/api/install/apps', async (req, res) => {
+  try {
+    const cfg = normalizeConfig(readConfig());
+    await installOrUpdateApps(cfg);
+    res.json({ ok: true, message: 'Installed or updated Sonarr, Radarr, and SABnzbd' });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: `Install failed: ${e.message}` });
   }
 });
 
@@ -553,5 +638,5 @@ app.post('/container/:name/:action', async (req, res) => {
 
 app.listen(PORT, () => {
   ensureConfig();
-  console.log(`servarr-ui listening on ${PORT}`);
+  console.log(`wslservarr-ui listening on ${PORT}`);
 });

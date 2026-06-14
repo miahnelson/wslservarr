@@ -6,15 +6,15 @@ param(
     # Setup parameters
     [string]$RootFsTar,
     [string]$TimeZone = "America/New_York",
-    [string]$DataRootPath = "$env:USERPROFILE\ServarrData",
+    [string]$DataRootPath = "$env:USERPROFILE\WslServarrData",
     [string]$RootFsDownloadUrl = "https://cloud-images.ubuntu.com/wsl/noble/current/ubuntu-noble-wsl-amd64-wsl.rootfs.tar.gz",
     [switch]$AutoDownloadRootFs = $true,
     [switch]$ForceRecreate,
 
     # Common parameters
-    [string]$DistroName = "servarr-wsl",
-    [string]$InstallPath = "C:\WSL\servarr-wsl",
-    [string]$LinuxUser = "servarr",
+    [string]$DistroName = "wslservarr-wsl",
+    [string]$InstallPath = "C:\WSL\wslservarr-wsl",
+    [string]$LinuxUser = "wslservarr",
     [string]$DownloadDir = "$PSScriptRoot\.cache",
 
     # Uninstall parameters
@@ -68,12 +68,12 @@ function Invoke-WslRoot {
 
 if ([string]::IsNullOrWhiteSpace($Action)) {
     Write-Host ""
-    Write-Host "=== Servarr WSL Manager ===" -ForegroundColor Cyan
+    Write-Host "=== WSLServarr Manager ===" -ForegroundColor Cyan
     Write-Host ""
     Write-Host "What would you like to do?"
-    Write-Host "  1) Setup    - Install Servarr WSL from scratch"
+    Write-Host "  1) Setup    - Install WSLServarr from scratch"
     Write-Host "  2) Update   - Redeploy UI to existing installation"
-    Write-Host "  3) Uninstall - Remove Servarr WSL"
+    Write-Host "  3) Uninstall - Remove WSLServarr"
     Write-Host "  4) Reinstall - Recreate distro and reinstall stack"
     Write-Host ""
     $choice = Read-Host "Enter your choice (1-4)"
@@ -109,7 +109,7 @@ if ($Action -eq "Setup") {
 
     # Interactive Windows root folder selection
     Write-Host ""
-    Write-Host "=== Servarr WSL Setup ===" -ForegroundColor Cyan
+    Write-Host "=== WSLServarr Setup ===" -ForegroundColor Cyan
     Write-Host ""
     Write-Host "Choose a single Windows root folder."
     Write-Host "The script will create and use these subfolders under it:"
@@ -226,22 +226,22 @@ if ($Action -eq "Setup") {
     $bootstrapSystemd = @'
 set -euo pipefail
 
-if ! id -u servarr >/dev/null 2>&1; then
-  useradd -m -s /bin/bash servarr
+if ! id -u wslservarr >/dev/null 2>&1; then
+    useradd -m -s /bin/bash wslservarr
 fi
 
 mkdir -p /etc/sudoers.d
-cat >/etc/sudoers.d/90-servarr <<'EOF'
-servarr ALL=(ALL) NOPASSWD:ALL
+cat >/etc/sudoers.d/90-wslservarr <<'EOF'
+wslservarr ALL=(ALL) NOPASSWD:ALL
 EOF
-chmod 0440 /etc/sudoers.d/90-servarr
+chmod 0440 /etc/sudoers.d/90-wslservarr
 
 cat >/etc/wsl.conf <<'EOF'
 [boot]
 systemd=true
 
 [user]
-default=servarr
+default=wslservarr
 
 [interop]
 appendWindowsPath=false
@@ -250,14 +250,14 @@ appendWindowsPath=false
 enabled=false
 EOF
 
-cat >/etc/profile.d/00-servarr-homefix.sh <<'EOF'
+cat >/etc/profile.d/00-wslservarr-homefix.sh <<'EOF'
 if [ -n "$USER" ] && [ -d "/home/$USER" ]; then
   case "$HOME" in
     [A-Za-z]:*|[A-Za-z]:\\*) export HOME="/home/$USER" ;;
   esac
 fi
 EOF
-chmod 0644 /etc/profile.d/00-servarr-homefix.sh
+chmod 0644 /etc/profile.d/00-wslservarr-homefix.sh
 '@
     Invoke-Wsl -Distro $DistroName -Script $bootstrapSystemd
 
@@ -266,8 +266,8 @@ chmod 0644 /etc/profile.d/00-servarr-homefix.sh
     Start-Sleep -Seconds 2
 
     Write-Host "[6/8] Copying custom web UI sources into distro..."
-    & wsl -d $DistroName -u root -- bash -lc "mkdir -p /opt/servarr"
-    tar -C $PSScriptRoot -cf - servarr-ui | wsl -d $DistroName -u root -- bash -lc "tar -xf - -C /opt/servarr"
+    & wsl -d $DistroName -u root -- bash -lc "mkdir -p /opt/wslservarr"
+    tar -C $PSScriptRoot -cf - servarr-ui | wsl -d $DistroName -u root -- bash -lc "tar -xf - -C /opt/wslservarr"
 
     Write-Host "[7/8] Mounting Windows folders into WSL..."
     
@@ -307,7 +307,7 @@ mount | grep -E '/mnt/(config|media|downloads)' || echo "  (mounts may appear on
 "@
     Invoke-Wsl -Distro $DistroName -Script $mountScript
 
-    Write-Host "[8/8] Installing Docker Engine + Compose + minimal Servarr UI..."
+    Write-Host "[8/8] Installing Docker Engine + Compose + minimal WSLServarr UI..."
     $installStack = @"
 set -euo pipefail
 
@@ -337,32 +337,32 @@ printf '%s\n' '{"auths":{}}' >/root/.docker/config.json
 printf '%s\n' '{"auths":{}}' >/home/${LinuxUser}/.docker/config.json
 chown -R ${LinuxUser}:${LinuxUser} /home/${LinuxUser}/.docker
 
-mkdir -p /opt/servarr
-mkdir -p /mnt/config/servarr-ui
-chown -R ${LinuxUser}:${LinuxUser} /opt/servarr /mnt/config /mnt/media /mnt/downloads
+mkdir -p /opt/wslservarr
+mkdir -p /mnt/config/wslservarr-ui
+chown -R ${LinuxUser}:${LinuxUser} /opt/wslservarr /mnt/config /mnt/media /mnt/downloads
 
-cat >/opt/servarr/compose.yml <<'COMPOSEOF'
+cat >/opt/wslservarr/compose.yml <<'COMPOSEOF'
 services:
-  servarr_ui:
-    build: ./servarr-ui
-    container_name: servarr_ui
-    environment:
-      - PORT=5055
-      - CONFIG_PATH=/data/config.json
-      - TZ=$TimeZone
-    volumes:
-      - /var/run/docker.sock:/var/run/docker.sock
-      - /mnt/config/servarr-ui:/data
-      - /opt/servarr:/opt/servarr
-      - /mnt/config:/mnt/config
-      - /mnt/media:/mnt/media
-      - /mnt/downloads:/mnt/downloads
-    ports:
-      - "5055:5055"
-    restart: unless-stopped
+    wslservarr_ui:
+        build: ./servarr-ui
+        container_name: wslservarr_ui
+        environment:
+            - PORT=5055
+            - CONFIG_PATH=/data/config.json
+            - TZ=$TimeZone
+        volumes:
+            - /var/run/docker.sock:/var/run/docker.sock
+            - /mnt/config/wslservarr-ui:/data
+            - /opt/wslservarr:/opt/wslservarr
+            - /mnt/config:/mnt/config
+            - /mnt/media:/mnt/media
+            - /mnt/downloads:/mnt/downloads
+        ports:
+            - "5055:5055"
+        restart: unless-stopped
 COMPOSEOF
 
-cd /opt/servarr
+cd /opt/wslservarr
 docker compose pull
 docker compose up -d --build
 
@@ -374,7 +374,7 @@ systemctl set-default multi-user.target
     Write-Host "Completed." -ForegroundColor Green
     Write-Host ""
     Write-Host "Apps:"
-    Write-Host "  ServarrUI http://localhost:5055"
+    Write-Host "  WSLServarrUI http://localhost:5055"
     Write-Host ""
     
     # Keep the distro running by ensuring docker and systemd are active
@@ -384,10 +384,10 @@ systemctl set-default multi-user.target
     # Normalize Docker client config JSON files (handles older malformed installs)
     $dockerConfigRepair = @(
         'set -euo pipefail',
-        'mkdir -p /root/.docker /home/servarr/.docker',
+        'mkdir -p /root/.docker /home/wslservarr/.docker',
         'printf ''%s\n'' ''{"auths":{}}'' >/root/.docker/config.json',
-        'printf ''%s\n'' ''{"auths":{}}'' >/home/servarr/.docker/config.json',
-        'chown -R servarr:servarr /home/servarr/.docker'
+        'printf ''%s\n'' ''{"auths":{}}'' >/home/wslservarr/.docker/config.json',
+        'chown -R wslservarr:wslservarr /home/wslservarr/.docker'
     ) -join "`n"
     Invoke-WslRoot -Distro $DistroName -Script $dockerConfigRepair
 
@@ -405,7 +405,7 @@ systemctl set-default multi-user.target
     Write-Host "  Downloads: $downloadsPath"
     Write-Host ""
     Write-Host "Open shell: wsl -d $DistroName"
-    Write-Host "Stack file: /opt/servarr/compose.yml"
+    Write-Host "Stack file: /opt/wslservarr/compose.yml"
     Write-Host ""
     Write-Host "Tip: Install Sonarr/Radarr/SABnzbd from the web UI first-run setup page."
 }
@@ -426,8 +426,8 @@ elseif ($Action -eq "Update") {
     }
 
     Write-Host "[1/4] Copying UI sources..."
-    & wsl -d $DistroName -u root -- bash -lc "mkdir -p /opt/servarr"
-    tar -C $PSScriptRoot -cf - servarr-ui | wsl -d $DistroName -u root -- bash -lc "tar -xf - -C /opt/servarr"
+    & wsl -d $DistroName -u root -- bash -lc "mkdir -p /opt/wslservarr"
+    tar -C $PSScriptRoot -cf - servarr-ui | wsl -d $DistroName -u root -- bash -lc "tar -xf - -C /opt/wslservarr"
 
     Write-Host "[2/4] Ensuring compose service exists..."
     # Build bash script by constructing it line by line to avoid PowerShell parsing
@@ -435,20 +435,20 @@ elseif ($Action -eq "Update") {
     $gt = '>'  # Greater than character
     $bashScriptLines = @(
         'set -euo pipefail',
-        'mkdir -p /mnt/config/servarr-ui',
-        'if ! grep -q "servarr_ui:" /opt/servarr/compose.yml; then',
-        "cat >>/opt/servarr/compose.yml $lt$lt"+'BASHEOF',
+        'mkdir -p /mnt/config/wslservarr-ui',
+        'if ! grep -q "wslservarr_ui:" /opt/wslservarr/compose.yml; then',
+        "cat >>/opt/wslservarr/compose.yml $lt$lt"+'BASHEOF',
         '',
-        '  servarr_ui:',
+        '  wslservarr_ui:',
         '    build: ./servarr-ui',
-        '    container_name: servarr_ui',
+        '    container_name: wslservarr_ui',
         '    environment:',
         '      - PORT=5055',
         '      - CONFIG_PATH=/data/config.json',
         '    volumes:',
         '      - /var/run/docker.sock:/var/run/docker.sock',
-        '      - /mnt/config/servarr-ui:/data',
-        '      - /opt/servarr:/opt/servarr',
+        '      - /mnt/config/wslservarr-ui:/data',
+        '      - /opt/wslservarr:/opt/wslservarr',
         '      - /mnt/config:/mnt/config',
         '      - /mnt/media:/mnt/media',
         '      - /mnt/downloads:/mnt/downloads',
@@ -464,15 +464,15 @@ elseif ($Action -eq "Update") {
 
     $dockerConfigRepair = @(
         'set -euo pipefail',
-        'mkdir -p /root/.docker /home/servarr/.docker',
+        'mkdir -p /root/.docker /home/wslservarr/.docker',
         'printf ''%s\n'' ''{"auths":{}}'' >/root/.docker/config.json',
-        'printf ''%s\n'' ''{"auths":{}}'' >/home/servarr/.docker/config.json',
-        'chown -R servarr:servarr /home/servarr/.docker'
+        'printf ''%s\n'' ''{"auths":{}}'' >/home/wslservarr/.docker/config.json',
+        'chown -R wslservarr:wslservarr /home/wslservarr/.docker'
     ) -join "`n"
     Invoke-WslRoot -Distro $DistroName -Script $dockerConfigRepair
 
     Write-Host "[3/4] Building and starting custom UI..."
-    & wsl -d $DistroName -- bash -lc "cd /opt/servarr && docker compose up -d --build servarr_ui"
+    & wsl -d $DistroName -- bash -lc "cd /opt/wslservarr && docker compose up -d --build wslservarr_ui"
 
     Write-Host "[4/4] Done." -ForegroundColor Green
     Write-Host "UI updated: http://localhost:5055"
@@ -496,7 +496,7 @@ elseif ($Action -eq "Uninstall") {
         # Interactive prompts if no flags provided
         if (-not $PSBoundParameters.ContainsKey('RemoveDistro') -and -not $PSBoundParameters.ContainsKey('PurgeData')) {
             Write-Host ""
-            Write-Host "=== Servarr WSL Uninstall Options ===" -ForegroundColor Cyan
+            Write-Host "=== WSLServarr Uninstall Options ===" -ForegroundColor Cyan
             Write-Host ""
 
             $response = Read-Host "Remove all containers (UI, Sonarr, Radarr, SABnzbd)? [Y/n]"
@@ -520,34 +520,34 @@ elseif ($Action -eq "Uninstall") {
             Write-Host ""
         }
 
-        Write-Host "[1/4] Stopping and removing Servarr containers from '$DistroName'..."
+        Write-Host "[1/4] Stopping and removing WSLServarr containers from '$DistroName'..."
     $orOp = $null; $orOp = [char]124 + [char]124  # || operator
         $cleanupScript = @(
             'set -euo pipefail',
             '',
             'if command -v docker >/dev/null 2>&1; then',
-            '  if [ -f /opt/servarr/compose.yml ]; then',
-            "    docker compose -f /opt/servarr/compose.yml down --remove-orphans $orOp true",
+            '  if [ -f /opt/wslservarr/compose.yml ]; then',
+            "    docker compose -f /opt/wslservarr/compose.yml down --remove-orphans $orOp true",
             '  fi',
             '',
-            '  if [ -f /opt/servarr/compose.apps.yml ]; then',
-            "    docker compose -f /opt/servarr/compose.apps.yml down --remove-orphans $orOp true",
+            '  if [ -f /opt/wslservarr/compose.apps.yml ]; then',
+            "    docker compose -f /opt/wslservarr/compose.apps.yml down --remove-orphans $orOp true",
             '  fi',
             '',
-            "  docker rm -f servarr_ui sonarr radarr sabnzbd >/dev/null 2>&1 $orOp true",
+            "  docker rm -f wslservarr_ui sonarr radarr sabnzbd >/dev/null 2>&1 $orOp true",
             'fi'
         ) -join "`n"
-        if ($PSCmdlet.ShouldProcess($DistroName, "Stop and remove Servarr containers")) {
+        if ($PSCmdlet.ShouldProcess($DistroName, "Stop and remove WSLServarr containers")) {
             Invoke-WslRoot -Distro $DistroName -Script $cleanupScript
         }
 
         if ($PurgeData) {
-            Write-Host "[2/4] Purging Servarr data directories in distro..."
+            Write-Host "[2/4] Purging WSLServarr data directories in distro..."
             $purgeScript = @(
                 'set -euo pipefail',
-                'rm -rf /srv/config/servarr-ui /srv/config/sonarr /srv/config/radarr /srv/config/sabnzbd',
+                'rm -rf /srv/config/wslservarr-ui /srv/config/sonarr /srv/config/radarr /srv/config/sabnzbd',
                 'rm -rf /srv/downloads /srv/media',
-                'rm -f /opt/servarr/compose.apps.yml'
+                'rm -f /opt/wslservarr/compose.apps.yml'
             ) -join "`n"
             if ($PSCmdlet.ShouldProcess($DistroName, "Purge /srv and app compose data")) {
                 Invoke-WslRoot -Distro $DistroName -Script $purgeScript
