@@ -282,6 +282,7 @@ function App() {
             <h3>Paths & Runtime</h3>
             <label>Media Root</label><input value={config.paths.mediaRoot} onChange={(e) => update('paths.mediaRoot', e.target.value)} />
             <label>Downloads Root</label><input value={config.paths.downloadsRoot} onChange={(e) => update('paths.downloadsRoot', e.target.value)} />
+            <label>Config Root</label><input value={config.paths.configRoot || ''} onChange={(e) => update('paths.configRoot', e.target.value)} />
             <label>Timezone</label><input value={config.runtime.timezone} onChange={(e) => update('runtime.timezone', e.target.value)} />
             <label>PUID</label><input value={config.runtime.puid} onChange={(e) => update('runtime.puid', e.target.value)} />
             <label>PGID</label><input value={config.runtime.pgid} onChange={(e) => update('runtime.pgid', e.target.value)} />
@@ -289,13 +290,25 @@ function App() {
 
           <div>
             <h3>App Endpoints</h3>
+            <label className="check"><input type="checkbox" checked={!!config.sonarr.enabled} onChange={(e) => update('sonarr.enabled', e.target.checked)} /> Sonarr Enabled</label>
             <label>Sonarr URL</label><input value={config.sonarr.url} onChange={(e) => update('sonarr.url', e.target.value)} />
+            <label>Sonarr Port</label><input value={config.sonarr.port} onChange={(e) => update('sonarr.port', e.target.value)} />
             <label>Sonarr API Key</label><input type="password" value={config.sonarr.apiKey} onChange={(e) => update('sonarr.apiKey', e.target.value)} />
+
+            <label className="check"><input type="checkbox" checked={!!config.radarr.enabled} onChange={(e) => update('radarr.enabled', e.target.checked)} /> Radarr Enabled</label>
             <label>Radarr URL</label><input value={config.radarr.url} onChange={(e) => update('radarr.url', e.target.value)} />
+            <label>Radarr Port</label><input value={config.radarr.port} onChange={(e) => update('radarr.port', e.target.value)} />
             <label>Radarr API Key</label><input type="password" value={config.radarr.apiKey} onChange={(e) => update('radarr.apiKey', e.target.value)} />
+
+            <label className="check"><input type="checkbox" checked={!!config.sabnzbd.enabled} onChange={(e) => update('sabnzbd.enabled', e.target.checked)} /> SABnzbd Enabled</label>
             <label>SABnzbd URL</label><input value={config.sabnzbd.url} onChange={(e) => update('sabnzbd.url', e.target.value)} />
+            <label>SABnzbd Port</label><input value={config.sabnzbd.port} onChange={(e) => update('sabnzbd.port', e.target.value)} />
             <label>SABnzbd API Key</label><input type="password" value={config.sabnzbd.apiKey} onChange={(e) => update('sabnzbd.apiKey', e.target.value)} />
+
+            <label className="check"><input type="checkbox" checked={!!config.jellyfin.enabled} onChange={(e) => update('jellyfin.enabled', e.target.checked)} /> Jellyfin Enabled</label>
             <label>Jellyfin URL</label><input value={config.jellyfin.url} onChange={(e) => update('jellyfin.url', e.target.value)} />
+            <label>Jellyfin Port</label><input value={config.jellyfin.port} onChange={(e) => update('jellyfin.port', e.target.value)} />
+            <label>Jellyfin API Key</label><input type="password" value={config.jellyfin.apiKey} onChange={(e) => update('jellyfin.apiKey', e.target.value)} />
           </div>
         </div>
 
@@ -320,6 +333,25 @@ function App() {
             <textarea className="codebox" value={indexersJson} onChange={(e) => setIndexersJson(e.target.value)} />
           </div>
         </div>
+
+        <details className="card" style={{ marginTop: 8 }}>
+          <summary>Advanced</summary>
+          <div className="grid two" style={{ marginTop: 10 }}>
+            <div>
+              <h3>App Media Paths</h3>
+              <label>Sonarr TV Root</label><input value={config.sonarr.tvRoot} onChange={(e) => update('sonarr.tvRoot', e.target.value)} />
+              <label>Radarr Movie Root</label><input value={config.radarr.movieRoot} onChange={(e) => update('radarr.movieRoot', e.target.value)} />
+            </div>
+            <div>
+              <h3>SAB Categories</h3>
+              <label>TV Category</label><input value={config.sabnzbd.tvCategory} onChange={(e) => update('sabnzbd.tvCategory', e.target.value)} />
+              <label>Movie Category</label><input value={config.sabnzbd.movieCategory} onChange={(e) => update('sabnzbd.movieCategory', e.target.value)} />
+            </div>
+          </div>
+
+          <h3>Compose YAML</h3>
+          <textarea className="codebox" value={config.composeYaml || ''} onChange={(e) => update('composeYaml', e.target.value)} />
+        </details>
 
         <div className="row">
           <button onClick={saveConfig} disabled={saving}>{saving ? 'Saving...' : 'Save Settings'}</button>
