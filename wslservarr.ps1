@@ -91,20 +91,35 @@ docker compose up -d wslservarr_ui
 '@
     Invoke-Wsl -Distro $Distro -Script $runScript
 
+    Write-Host "[Run] Starting keepalive session to prevent WSL from idling out..."
+    $keepAliveArgs = @('-d', $Distro, '-u', 'root', '--', 'bash', '-lc', 'while true; do sleep 3600; done')
+    $keepAliveProcess = Start-Process -FilePath 'wsl.exe' -ArgumentList $keepAliveArgs -WindowStyle Hidden -PassThru
+
     Write-Host ""
     Write-Host "WSLServarr UI: http://localhost:5055" -ForegroundColor Green
     Write-Host "Script will keep running to keep services warm. Press Ctrl+C to stop." -ForegroundColor Yellow
     Write-Host ""
 
-    while ($true) {
-        $status = & wsl -d $Distro -- bash -lc "docker ps --format '{{.Names}}\t{{.Status}}' | grep '^wslservarr_ui' || true"
-        $ts = Get-Date -Format "HH:mm:ss"
-        if ([string]::IsNullOrWhiteSpace($status)) {
-            Write-Host "[$ts] wslservarr_ui not running | http://localhost:5055" -ForegroundColor Yellow
-        } else {
-            Write-Host "[$ts] $status | http://localhost:5055" -ForegroundColor DarkGray
+    try {
+        while ($true) {
+            if ($keepAliveProcess.HasExited) {
+                Write-Host "[Run] Keepalive session exited, restarting..." -ForegroundColor Yellow
+                $keepAliveProcess = Start-Process -FilePath 'wsl.exe' -ArgumentList $keepAliveArgs -WindowStyle Hidden -PassThru
+            }
+
+            $status = & wsl -d $Distro -- bash -lc "docker ps --format '{{.Names}}\t{{.Status}}' | grep '^wslservarr_ui' || true"
+            $ts = Get-Date -Format "HH:mm:ss"
+            if ([string]::IsNullOrWhiteSpace($status)) {
+                Write-Host "[$ts] wslservarr_ui not running | http://localhost:5055" -ForegroundColor Yellow
+            } else {
+                Write-Host "[$ts] $status | http://localhost:5055" -ForegroundColor DarkGray
+            }
+            Start-Sleep -Seconds 30
         }
-        Start-Sleep -Seconds 30
+    } finally {
+        if ($keepAliveProcess -and -not $keepAliveProcess.HasExited) {
+            Stop-Process -Id $keepAliveProcess.Id -Force -ErrorAction SilentlyContinue
+        }
     }
 }
 
