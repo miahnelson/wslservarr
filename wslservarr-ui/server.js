@@ -29,6 +29,14 @@ app.use('/api', (req, res, next) => {
   next();
 });
 
+function withTimeout(promise, ms, label) {
+  let timer;
+  const timeout = new Promise((_, reject) => {
+    timer = setTimeout(() => reject(new Error(`${label} timed out after ${ms}ms`)), ms);
+  });
+  return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
+}
+
 function ensureConfig() {
   if (!fs.existsSync(path.dirname(CONFIG_PATH))) {
     fs.mkdirSync(path.dirname(CONFIG_PATH), { recursive: true });
@@ -166,7 +174,7 @@ async function ensureRootFolder(appName, cfg) {
 }
 
 async function getContainerStatuses() {
-  const all = await docker.listContainers({ all: true });
+  const all = await withTimeout(docker.listContainers({ all: true }), 4000, 'docker.listContainers');
   const map = new Map();
 
   for (const c of all) {
@@ -265,7 +273,7 @@ async function getWizardChecks() {
   };
 
   try {
-    await docker.ping();
+    await withTimeout(docker.ping(), 3000, 'docker.ping');
     checks.dockerResponsive = true;
   } catch (e) {
     checks.dockerError = e.message;
