@@ -1,0 +1,13 @@
+[Run] Ensuring Docker service is running...
+[Run] Ensuring UI container is running...
+time="2026-06-14T15:28:37-05:00" level=warning msg="Found orphan containers ([sonarr]) for this project. If you removed or renamed this service in your compose file, you can run this command with the --remove-orphans flag to clean it up."
+ Container wslservarr_ui Running 
+[Run] Starting keepalive session to prevent WSL from idling out...
+
+WSLServarr UI: http://localhost:5055
+Active config root: C:\wslservarr\config
+Script will keep running to keep services warm. Press Ctrl+C to stop.
+
+[15:28:37] wslservarr_ui	Up 5 minutes | http://localhost:5055
+[15:28:45] wslservarr_ui	Up 5 minutes | http://localhost:5055
+[15:29:15] wslservarr_ui	Up 6 minutes | http://localhost:5055
