@@ -66,5 +66,5 @@ wsl -d wslservarr-wsl mount | grep /mnt
 
 - `wslservarr.ps1` — Main installer entrypoint
 - `servarr.ps1` — Backward-compatible installer script
-- `servarr-ui/` — Node.js web UI/API
-- `servarr-mobile/` — React Native (Expo) mobile app
+- `wslservarr-ui/` — Node.js web UI/API
+- `wslservarr-mobile/` — React Native (Expo) mobile app

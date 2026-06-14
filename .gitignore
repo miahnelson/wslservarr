@@ -13,15 +13,15 @@ logs/
 .env.*
 *.local
 
-# Node (servarr-ui)
-servarr-ui/node_modules/
-servarr-ui/npm-debug.log*
-servarr-ui/yarn-debug.log*
-servarr-ui/yarn-error.log*
-servarr-ui/pnpm-debug.log*
+# Node (wslservarr-ui)
+wslservarr-ui/node_modules/
+wslservarr-ui/npm-debug.log*
+wslservarr-ui/yarn-debug.log*
+wslservarr-ui/yarn-error.log*
+wslservarr-ui/pnpm-debug.log*
 
 # Runtime/generated config
-servarr-ui/config.json
+wslservarr-ui/config.json
 
 # Archives / backups
 *.zip
