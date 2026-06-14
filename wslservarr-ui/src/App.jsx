@@ -22,6 +22,10 @@ function App() {
   const [yamlAppName, setYamlAppName] = useState('');
   const [yamlText, setYamlText] = useState('');
   const [yamlSaving, setYamlSaving] = useState(false);
+  const [diagOpen, setDiagOpen] = useState(false);
+  const [diagTitle, setDiagTitle] = useState('');
+  const [diagText, setDiagText] = useState('');
+  const [diagPath, setDiagPath] = useState('');
 
   const runningCount = useMemo(() => containers.filter(c => c.status === 'running').length, [containers]);
   const missingCount = useMemo(() => containers.filter(c => c.status === 'missing').length, [containers]);
@@ -220,6 +224,27 @@ function App() {
     setMessage(`${yamlAppName} yaml saved.`);
   }
 
+  async function captureDiagnostics(appName) {
+    setError('');
+    setDiagTitle(`${appName} diagnostics`);
+    setDiagText('Capturing diagnostics...');
+    setDiagPath('');
+    setDiagOpen(true);
+    try {
+      const res = await fetch(`/api/diagnostics/${appName}`);
+      const data = await res.json();
+      if (!res.ok || !data.ok) {
+        setDiagText(data.error || 'Failed to capture diagnostics');
+        return;
+      }
+      setDiagText(data.content || '(empty diagnostics)');
+      setDiagPath(data.filePath || '');
+      setMessage(`${appName} diagnostics captured.`);
+    } catch (e) {
+      setDiagText(`Failed to capture diagnostics: ${e.message}`);
+    }
+  }
+
   if (loading) return <div className="container"><h1>❯ wslservarr</h1><p>Loading…</p></div>;
 
   const deployStatus = deployState.running ? 'running' : deployState.success === false ? 'failed' : deployState.success === true ? 'completed' : 'idle';
@@ -277,6 +302,7 @@ function App() {
                     <button className="secondary action-btn accent" onClick={() => startDeployForApp(c.name)}>deploy</button>
                     <button className="secondary action-btn" onClick={() => testConnection(c.name)}>test</button>
                     <button className="secondary action-btn" onClick={() => openYamlEditor(c.name)}>yaml</button>
+                    <button className="secondary action-btn" onClick={() => captureDiagnostics(c.name)}>diag</button>
                   </div>
                 </td>
               </tr>
@@ -346,6 +372,19 @@ function App() {
               <button onClick={saveYamlEditor} disabled={yamlSaving}>{yamlSaving ? 'saving...' : '💾 save yaml'}</button>
               <button className="secondary" onClick={() => setYamlOpen(false)}>done</button>
             </div>
+          </div>
+        </div>
+      ) : null}
+
+      {diagOpen ? (
+        <div className="modal-backdrop">
+          <div className="modal-card modal-large">
+            <div className="inline-row" style={{ justifyContent: 'space-between' }}>
+              <h3 style={{ margin: 0 }}>{diagTitle}</h3>
+              <button className="secondary" onClick={() => setDiagOpen(false)}>close</button>
+            </div>
+            {diagPath ? <p className="small">saved: {diagPath}</p> : null}
+            <textarea className="codebox" value={diagText} readOnly />
           </div>
         </div>
       ) : null}

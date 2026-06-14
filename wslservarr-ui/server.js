@@ -12,6 +12,7 @@ const SPA_DIST_PATH = path.join(__dirname, 'dist');
 
 const PORT = process.env.PORT || 5055;
 const CONFIG_PATH = process.env.CONFIG_PATH || '/data/config.json';
+const DIAGNOSTICS_DIR = process.env.DIAGNOSTICS_DIR || '/data/diagnostics';
 const TARGET_CONTAINERS = ['sonarr', 'radarr', 'sabnzbd'];
 const APPS_COMPOSE_PATH = '/opt/wslservarr/compose.apps.yml';
 const execFileAsync = promisify(execFile);
@@ -100,6 +101,74 @@ function runCommandWithProgress(command, args, label, onProgress) {
       reject(new Error(`${label || command} failed with exit code ${code}`));
     });
   });
+}
+
+function ensureDiagnosticsDir() {
+  if (!fs.existsSync(DIAGNOSTICS_DIR)) {
+    fs.mkdirSync(DIAGNOSTICS_DIR, { recursive: true });
+  }
+}
+
+async function execForDiagnostics(command, args) {
+  try {
+    const { stdout, stderr } = await execFileAsync(command, args, { maxBuffer: 1024 * 1024 * 10 });
+    return `${stdout || ''}${stderr || ''}`.trim();
+  } catch (e) {
+    const out = `${e.stdout || ''}${e.stderr || ''}`.trim();
+    return out || e.message;
+  }
+}
+
+function buildDiagLogPath(appName, ts) {
+  const safe = ts.replace(/[:.]/g, '-');
+  return path.join(DIAGNOSTICS_DIR, `${appName}-${safe}.log`);
+}
+
+async function captureDiagnostics(appName) {
+  ensureDiagnosticsDir();
+  const ts = new Date().toISOString();
+  const lines = [];
+
+  lines.push(`# wslservarr diagnostics`);
+  lines.push(`timestamp: ${ts}`);
+  lines.push(`app: ${appName}`);
+  lines.push('');
+
+  const inspect = await execForDiagnostics('docker', ['inspect', appName]);
+  lines.push('## docker inspect');
+  lines.push(inspect || '(no output)');
+  lines.push('');
+
+  const dockerLogs = await execForDiagnostics('docker', ['logs', '--tail', '400', appName]);
+  lines.push('## docker logs --tail 400');
+  lines.push(dockerLogs || '(no output)');
+  lines.push('');
+
+  const appLogPath = `/mnt/config/${appName}/logs/${appName}.txt`;
+  const appDebugPath = `/mnt/config/${appName}/logs/${appName}.debug.txt`;
+  const appLogTail = await execForDiagnostics('bash', ['-lc', `if [ -f ${appLogPath} ]; then tail -n 400 ${appLogPath}; else echo missing:${appLogPath}; fi`]);
+  const appDebugTail = await execForDiagnostics('bash', ['-lc', `if [ -f ${appDebugPath} ]; then tail -n 400 ${appDebugPath}; else echo missing:${appDebugPath}; fi`]);
+  lines.push(`## tail -n 400 ${appLogPath}`);
+  lines.push(appLogTail || '(no output)');
+  lines.push('');
+  lines.push(`## tail -n 400 ${appDebugPath}`);
+  lines.push(appDebugTail || '(no output)');
+  lines.push('');
+
+  const composeTail = await execForDiagnostics('bash', ['-lc', `if [ -f ${APPS_COMPOSE_PATH} ]; then sed -n '1,260p' ${APPS_COMPOSE_PATH}; else echo missing:${APPS_COMPOSE_PATH}; fi`]);
+  lines.push(`## ${APPS_COMPOSE_PATH}`);
+  lines.push(composeTail || '(no output)');
+
+  const content = lines.join('\n');
+  const filePath = buildDiagLogPath(appName, ts);
+  fs.writeFileSync(filePath, content);
+
+  return {
+    appName,
+    timestamp: ts,
+    filePath,
+    content
+  };
 }
 
 function ensureConfig() {
@@ -371,7 +440,7 @@ function buildAppsCompose(cfg) {
 
   if (cfg.sonarr.enabled) {
     compose += `  sonarr:
-    image: lscr.io/linuxserver/sonarr:latest
+    image: lscr.io/linuxserver/sonarr:4.0.17.2952-ls313
     container_name: sonarr
     environment:
       - PUID=${puid}
@@ -468,6 +537,13 @@ function upsertServiceYaml(composeYaml, appName, serviceYaml) {
   return `${updated.join('\n').trimEnd()}\n`;
 }
 
+function applyComposeHotfixes(composeYaml) {
+  return String(composeYaml || '').replace(
+    'lscr.io/linuxserver/sonarr:latest',
+    'lscr.io/linuxserver/sonarr:4.0.17.2952-ls313'
+  );
+}
+
 async function installOrUpdateAppsWithProgress(config, onProgress) {
   const cfg = normalizeConfig(config);
   const dirs = ['/srv/config/sonarr', '/srv/config/radarr', '/srv/config/sabnzbd', '/srv/downloads', '/srv/media'];
@@ -478,7 +554,7 @@ async function installOrUpdateAppsWithProgress(config, onProgress) {
   }
 
   const composeYaml = (cfg.composeYaml && cfg.composeYaml.trim()) ? cfg.composeYaml : buildAppsCompose(cfg);
-  fs.writeFileSync(APPS_COMPOSE_PATH, composeYaml);
+  fs.writeFileSync(APPS_COMPOSE_PATH, applyComposeHotfixes(composeYaml));
   if (onProgress) onProgress(`Wrote compose file: ${APPS_COMPOSE_PATH}`);
 
   if (onProgress) onProgress('Pulling container images...');
@@ -513,7 +589,7 @@ async function installOrUpdateSingleAppWithProgress(config, appName, onProgress)
     if (onProgress) onProgress(`Custom compose did not define ${appName}; using generated compose for deployment.`);
   }
 
-  fs.writeFileSync(APPS_COMPOSE_PATH, composeYaml);
+  fs.writeFileSync(APPS_COMPOSE_PATH, applyComposeHotfixes(composeYaml));
   if (onProgress) onProgress(`Wrote compose file: ${APPS_COMPOSE_PATH}`);
 
   if (onProgress) onProgress(`Pulling image for ${appName}...`);
@@ -704,6 +780,39 @@ app.post('/api/install/apps/:appName/start', (req, res) => {
     return res.json({ ok: true, state: deployState });
   } catch (e) {
     return res.status(409).json({ ok: false, error: e.message, state: deployState });
+  }
+});
+
+app.get('/api/diagnostics/:appName', async (req, res) => {
+  try {
+    const appName = req.params.appName;
+    if (!TARGET_CONTAINERS.includes(appName)) {
+      return res.status(400).json({ ok: false, error: 'Unknown app' });
+    }
+
+    const report = await captureDiagnostics(appName);
+    return res.json({ ok: true, ...report });
+  } catch (e) {
+    return res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+app.get('/api/diagnostics/:appName/history', (req, res) => {
+  try {
+    const appName = req.params.appName;
+    if (!TARGET_CONTAINERS.includes(appName)) {
+      return res.status(400).json({ ok: false, error: 'Unknown app' });
+    }
+    ensureDiagnosticsDir();
+    const files = fs.readdirSync(DIAGNOSTICS_DIR)
+      .filter(name => name.startsWith(`${appName}-`) && name.endsWith('.log'))
+      .sort()
+      .reverse()
+      .slice(0, 20)
+      .map(name => ({ name, path: path.join(DIAGNOSTICS_DIR, name) }));
+    return res.json({ ok: true, files });
+  } catch (e) {
+    return res.status(500).json({ ok: false, error: e.message });
   }
 });
 
