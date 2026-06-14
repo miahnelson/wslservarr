@@ -183,14 +183,14 @@ function ensureConfig() {
         url: 'http://sonarr:8989', 
         apiKey: '',
         port: 8989,
-        tvRoot: '/mnt/media/tv'
+        tvRoot: '/media/tv'
       },
       radarr: { 
         enabled: false,
         url: 'http://radarr:7878', 
         apiKey: '',
         port: 7878,
-        movieRoot: '/mnt/media/movies'
+        movieRoot: '/media/movies'
       },
       sabnzbd: { 
         enabled: false,
@@ -337,10 +337,18 @@ async function getContainerStatuses() {
 
 function normalizeConfig(config) {
   const next = { ...config };
-  next.sonarr = next.sonarr || { enabled: false, url: 'http://sonarr:8989', apiKey: '', port: '8989', tvRoot: '/mnt/media/tv' };
-  next.radarr = next.radarr || { enabled: false, url: 'http://radarr:7878', apiKey: '', port: '7878', movieRoot: '/mnt/media/movies' };
+  next.sonarr = next.sonarr || { enabled: false, url: 'http://sonarr:8989', apiKey: '', port: '8989', tvRoot: '/media/tv' };
+  next.radarr = next.radarr || { enabled: false, url: 'http://radarr:7878', apiKey: '', port: '7878', movieRoot: '/media/movies' };
   next.sabnzbd = next.sabnzbd || { enabled: false, url: 'http://sabnzbd:8080', apiKey: '', port: '8080', tvCategory: 'tv', movieCategory: 'movies' };
   next.paths = next.paths || { mediaRoot: '/mnt/media', downloadsRoot: '/mnt/downloads' };
+  if (typeof next.sonarr.tvRoot === 'string' && next.sonarr.tvRoot.startsWith('/mnt/media')) {
+    next.sonarr.tvRoot = next.sonarr.tvRoot.replace('/mnt/media', '/media');
+  }
+  if (!next.sonarr.tvRoot) next.sonarr.tvRoot = '/media/tv';
+  if (typeof next.radarr.movieRoot === 'string' && next.radarr.movieRoot.startsWith('/mnt/media')) {
+    next.radarr.movieRoot = next.radarr.movieRoot.replace('/mnt/media', '/media');
+  }
+  if (!next.radarr.movieRoot) next.radarr.movieRoot = '/media/movies';
   next.runtime = next.runtime || {};
   next.runtime.timezone = next.runtime.timezone || 'America/New_York';
   next.runtime.puid = String(next.runtime.puid || '1000');
@@ -363,14 +371,14 @@ function buildConfigFromBody(body) {
       url: body.sonarrUrl || prev.sonarr.url || 'http://sonarr:8989',
       apiKey: body.sonarrApiKey || '',
       port: body.sonarrPort || '8989',
-      tvRoot: body.tvRoot || '/mnt/media/tv'
+      tvRoot: body.tvRoot || '/media/tv'
     },
     radarr: {
       enabled: body.radarrEnabled === 'on' || body.radarrEnabled === true,
       url: body.radarrUrl || prev.radarr.url || 'http://radarr:7878',
       apiKey: body.radarrApiKey || '',
       port: body.radarrPort || '7878',
-      movieRoot: body.movieRoot || '/mnt/media/movies'
+      movieRoot: body.movieRoot || '/media/movies'
     },
     sabnzbd: {
       enabled: body.sabnzbdEnabled === 'on' || body.sabnzbdEnabled === true,

@@ -15,6 +15,9 @@ logs/
 
 # Node (wslservarr-ui)
 wslservarr-ui/node_modules/
+wslservarr-ui/dist/
+wslservarr-ui/.vite/
+wslservarr-ui/.cache/
 wslservarr-ui/npm-debug.log*
 wslservarr-ui/yarn-debug.log*
 wslservarr-ui/yarn-error.log*
@@ -22,6 +25,8 @@ wslservarr-ui/pnpm-debug.log*
 
 # Runtime/generated config
 wslservarr-ui/config.json
+y/
+.cache/
 
 # Archives / backups
 *.zip
