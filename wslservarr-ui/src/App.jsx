@@ -36,6 +36,7 @@ function App() {
   const [message, setMessage] = useState('');
   const [error, setError] = useState('');
   const [saving, setSaving] = useState(false);
+  const [showApiKeys, setShowApiKeys] = useState({ sonarr: false, radarr: false, sabnzbd: false, jellyfin: false });
 
   const runningCount = useMemo(() => containers.filter((c) => c.status === 'running').length, [containers]);
 
@@ -77,6 +78,10 @@ function App() {
     if (appName === 'sabnzbd') return `http://localhost:${config?.sabnzbd?.port || 8080}`;
     if (appName === 'jellyfin') return `http://localhost:${config?.jellyfin?.port || 8096}`;
     return '';
+  }
+
+  function toggleShowApiKey(appName) {
+    setShowApiKeys((prev) => ({ ...prev, [appName]: !prev[appName] }));
   }
 
   async function saveConfig() {
@@ -307,22 +312,38 @@ function App() {
             <label className="check"><input type="checkbox" checked={!!config.sonarr.enabled} onChange={(e) => update('sonarr.enabled', e.target.checked)} /> Sonarr Enabled</label>
             <label>Sonarr URL</label><input value={config.sonarr.url} onChange={(e) => update('sonarr.url', e.target.value)} />
             <label>Sonarr Port</label><input value={config.sonarr.port} onChange={(e) => update('sonarr.port', e.target.value)} />
-            <label>Sonarr API Key</label><input type="password" value={config.sonarr.apiKey} onChange={(e) => update('sonarr.apiKey', e.target.value)} />
+            <label>Sonarr API Key ({config.sonarr.apiKey ? 'set' : 'not set'})</label>
+            <div className="row wrap">
+              <input type={showApiKeys.sonarr ? 'text' : 'password'} value={config.sonarr.apiKey} onChange={(e) => update('sonarr.apiKey', e.target.value)} />
+              <button className="secondary" onClick={() => toggleShowApiKey('sonarr')}>{showApiKeys.sonarr ? 'Hide' : 'Show'}</button>
+            </div>
 
             <label className="check"><input type="checkbox" checked={!!config.radarr.enabled} onChange={(e) => update('radarr.enabled', e.target.checked)} /> Radarr Enabled</label>
             <label>Radarr URL</label><input value={config.radarr.url} onChange={(e) => update('radarr.url', e.target.value)} />
             <label>Radarr Port</label><input value={config.radarr.port} onChange={(e) => update('radarr.port', e.target.value)} />
-            <label>Radarr API Key</label><input type="password" value={config.radarr.apiKey} onChange={(e) => update('radarr.apiKey', e.target.value)} />
+            <label>Radarr API Key ({config.radarr.apiKey ? 'set' : 'not set'})</label>
+            <div className="row wrap">
+              <input type={showApiKeys.radarr ? 'text' : 'password'} value={config.radarr.apiKey} onChange={(e) => update('radarr.apiKey', e.target.value)} />
+              <button className="secondary" onClick={() => toggleShowApiKey('radarr')}>{showApiKeys.radarr ? 'Hide' : 'Show'}</button>
+            </div>
 
             <label className="check"><input type="checkbox" checked={!!config.sabnzbd.enabled} onChange={(e) => update('sabnzbd.enabled', e.target.checked)} /> SABnzbd Enabled</label>
             <label>SABnzbd URL</label><input value={config.sabnzbd.url} onChange={(e) => update('sabnzbd.url', e.target.value)} />
             <label>SABnzbd Port</label><input value={config.sabnzbd.port} onChange={(e) => update('sabnzbd.port', e.target.value)} />
-            <label>SABnzbd API Key</label><input type="password" value={config.sabnzbd.apiKey} onChange={(e) => update('sabnzbd.apiKey', e.target.value)} />
+            <label>SABnzbd API Key ({config.sabnzbd.apiKey ? 'set' : 'not set'})</label>
+            <div className="row wrap">
+              <input type={showApiKeys.sabnzbd ? 'text' : 'password'} value={config.sabnzbd.apiKey} onChange={(e) => update('sabnzbd.apiKey', e.target.value)} />
+              <button className="secondary" onClick={() => toggleShowApiKey('sabnzbd')}>{showApiKeys.sabnzbd ? 'Hide' : 'Show'}</button>
+            </div>
 
             <label className="check"><input type="checkbox" checked={!!config.jellyfin.enabled} onChange={(e) => update('jellyfin.enabled', e.target.checked)} /> Jellyfin Enabled</label>
             <label>Jellyfin URL</label><input value={config.jellyfin.url} onChange={(e) => update('jellyfin.url', e.target.value)} />
             <label>Jellyfin Port</label><input value={config.jellyfin.port} onChange={(e) => update('jellyfin.port', e.target.value)} />
-            <label>Jellyfin API Key</label><input type="password" value={config.jellyfin.apiKey} onChange={(e) => update('jellyfin.apiKey', e.target.value)} />
+            <label>Jellyfin API Key ({config.jellyfin.apiKey ? 'set' : 'not set'})</label>
+            <div className="row wrap">
+              <input type={showApiKeys.jellyfin ? 'text' : 'password'} value={config.jellyfin.apiKey} onChange={(e) => update('jellyfin.apiKey', e.target.value)} />
+              <button className="secondary" onClick={() => toggleShowApiKey('jellyfin')}>{showApiKeys.jellyfin ? 'Hide' : 'Show'}</button>
+            </div>
           </div>
         </div>
 
