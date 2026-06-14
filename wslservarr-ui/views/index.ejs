@@ -197,10 +197,12 @@
     </form>
 
     <!-- Deploy Section -->
-    <form method="post" action="/install/apps" class="card">
+    <form method="post" action="/install/apps" class="card" id="deployForm">
       <h2>⚡ Deploy Services</h2>
       <p class="card-subtitle">Install & configure enabled services</p>
-      <button type="submit" style="width: 100%; padding: 14px; font-size: 1rem;">→ deploy checked services</button>
+      <button type="submit" style="width: 100%; padding: 14px; font-size: 1rem;" id="deployBtn">→ deploy checked services</button>
+      <p class="small" style="margin-top: 10px;">Status: <span id="deployStatus">idle</span></p>
+      <pre id="deployLog" style="margin-top: 10px; max-height: 260px; overflow: auto; background: var(--bg-tertiary); border: 1px solid var(--border); border-radius: 6px; padding: 12px; font-size: 0.8rem; white-space: pre-wrap;">No deployment output yet.</pre>
     </form>
 
     <form method="post" action="/wizard/restart" class="card" onsubmit="return confirm('Re-open setup wizard? This lets you re-run initial setup.');">
@@ -227,6 +229,50 @@
   </div>
 
   <script>
+    let deployEventSource = null;
+
+    function renderDeployState(state) {
+      if (!state) return;
+      const status = document.getElementById('deployStatus');
+      const log = document.getElementById('deployLog');
+      const btn = document.getElementById('deployBtn');
+
+      if (state.running) {
+        status.textContent = 'running';
+        btn.disabled = true;
+      } else if (state.success === true) {
+        status.textContent = 'completed';
+        btn.disabled = false;
+      } else if (state.success === false) {
+        status.textContent = 'failed';
+        btn.disabled = false;
+      } else {
+        status.textContent = 'idle';
+        btn.disabled = false;
+      }
+
+      if (Array.isArray(state.logs) && state.logs.length > 0) {
+        log.textContent = state.logs.join('\n');
+        log.scrollTop = log.scrollHeight;
+      }
+    }
+
+    function connectDeployStream() {
+      if (deployEventSource) return;
+      deployEventSource = new EventSource('/api/install/apps/stream');
+      deployEventSource.onmessage = (evt) => {
+        try {
+          const payload = JSON.parse(evt.data || '{}');
+          if (payload.state) renderDeployState(payload.state);
+        } catch (_) {
+          // ignore malformed payloads
+        }
+      };
+      deployEventSource.onerror = () => {
+        // Keep page functional even if stream temporarily drops.
+      };
+    }
+
     function toggleSection(header) {
       const content = header.nextElementSibling;
       const arrow = header.querySelector('.toggle-arrow');
@@ -262,6 +308,27 @@
         document.querySelector('form').dispatchEvent(new Event('submit'));
       }
     });
+
+    document.getElementById('deployForm').addEventListener('submit', async function(e) {
+      e.preventDefault();
+      connectDeployStream();
+
+      const status = document.getElementById('deployStatus');
+      status.textContent = 'starting...';
+
+      const res = await fetch('/api/install/apps/start', { method: 'POST' });
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok || !body.ok) {
+        status.textContent = 'failed to start';
+        alert(body.error || 'Failed to start deployment');
+        if (body.state) renderDeployState(body.state);
+        return;
+      }
+
+      if (body.state) renderDeployState(body.state);
+    });
+
+    connectDeployStream();
   </script>
 </body>
 </html>

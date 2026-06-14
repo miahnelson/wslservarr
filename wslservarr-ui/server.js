@@ -3,7 +3,7 @@ const fs = require('fs');
 const path = require('path');
 const axios = require('axios');
 const Docker = require('dockerode');
-const { execFile } = require('child_process');
+const { execFile, spawn } = require('child_process');
 const { promisify } = require('util');
 
 const app = express();
@@ -14,6 +14,15 @@ const CONFIG_PATH = process.env.CONFIG_PATH || '/data/config.json';
 const TARGET_CONTAINERS = ['sonarr', 'radarr', 'sabnzbd'];
 const APPS_COMPOSE_PATH = '/opt/wslservarr/compose.apps.yml';
 const execFileAsync = promisify(execFile);
+const deployClients = new Set();
+const deployState = {
+  running: false,
+  startedAt: null,
+  finishedAt: null,
+  success: null,
+  error: '',
+  logs: []
+};
 
 app.set('view engine', 'ejs');
 app.set('views', path.join(__dirname, 'views'));
@@ -35,6 +44,63 @@ function withTimeout(promise, ms, label) {
     timer = setTimeout(() => reject(new Error(`${label} timed out after ${ms}ms`)), ms);
   });
   return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
+}
+
+function emitDeployEvent(type, payload = {}) {
+  const message = `data: ${JSON.stringify({ type, ...payload })}\n\n`;
+  for (const client of deployClients) {
+    client.write(message);
+  }
+}
+
+function pushDeployLog(line) {
+  const text = String(line || '').replace(/\r/g, '');
+  if (!text.trim()) return;
+  deployState.logs.push(text);
+  if (deployState.logs.length > 1000) {
+    deployState.logs = deployState.logs.slice(-1000);
+  }
+  emitDeployEvent('log', { line: text, state: deployState });
+}
+
+function setDeployState(patch) {
+  Object.assign(deployState, patch);
+  emitDeployEvent('state', { state: deployState });
+}
+
+function runCommandWithProgress(command, args, label, onProgress) {
+  return new Promise((resolve, reject) => {
+    const child = spawn(command, args, { stdio: ['ignore', 'pipe', 'pipe'] });
+    const prefix = label ? `[${label}] ` : '';
+    const log = (line) => {
+      if (onProgress) onProgress(`${prefix}${line}`);
+    };
+
+    let stdoutBuffer = '';
+    let stderrBuffer = '';
+
+    child.stdout.on('data', (chunk) => {
+      stdoutBuffer += chunk.toString();
+      const lines = stdoutBuffer.split('\n');
+      stdoutBuffer = lines.pop() || '';
+      for (const line of lines) log(line);
+    });
+
+    child.stderr.on('data', (chunk) => {
+      stderrBuffer += chunk.toString();
+      const lines = stderrBuffer.split('\n');
+      stderrBuffer = lines.pop() || '';
+      for (const line of lines) log(line);
+    });
+
+    child.on('error', (err) => reject(err));
+    child.on('close', (code) => {
+      if (stdoutBuffer.trim()) log(stdoutBuffer.trim());
+      if (stderrBuffer.trim()) log(stderrBuffer.trim());
+      if (code === 0) return resolve();
+      reject(new Error(`${label || command} failed with exit code ${code}`));
+    });
+  });
 }
 
 function ensureConfig() {
@@ -426,6 +492,66 @@ async function installOrUpdateApps(config) {
   await execFileAsync('docker', ['compose', '-f', APPS_COMPOSE_PATH, 'up', '-d']);
 }
 
+async function installOrUpdateAppsWithProgress(config, onProgress) {
+  const cfg = normalizeConfig(config);
+  const dirs = ['/srv/config/sonarr', '/srv/config/radarr', '/srv/config/sabnzbd', '/srv/downloads', '/srv/media'];
+  if (onProgress) onProgress('Preparing app directories...');
+  for (const d of dirs) {
+    fs.mkdirSync(d, { recursive: true });
+    if (onProgress) onProgress(`Ensured directory: ${d}`);
+  }
+
+  const composeYaml = (cfg.composeYaml && cfg.composeYaml.trim()) ? cfg.composeYaml : buildAppsCompose(cfg);
+  fs.writeFileSync(APPS_COMPOSE_PATH, composeYaml);
+  if (onProgress) onProgress(`Wrote compose file: ${APPS_COMPOSE_PATH}`);
+
+  if (onProgress) onProgress('Pulling container images...');
+  await runCommandWithProgress('docker', ['compose', '-f', APPS_COMPOSE_PATH, 'pull'], 'pull', onProgress);
+
+  if (onProgress) onProgress('Starting services...');
+  await runCommandWithProgress('docker', ['compose', '-f', APPS_COMPOSE_PATH, 'up', '-d'], 'up', onProgress);
+
+  if (onProgress) onProgress('Deployment completed.');
+}
+
+function startDeployJob(config) {
+  if (deployState.running) {
+    throw new Error('A deployment is already in progress.');
+  }
+
+  setDeployState({
+    running: true,
+    startedAt: new Date().toISOString(),
+    finishedAt: null,
+    success: null,
+    error: '',
+    logs: []
+  });
+  pushDeployLog('Deployment started...');
+
+  (async () => {
+    try {
+      await installOrUpdateAppsWithProgress(config, pushDeployLog);
+      setDeployState({
+        running: false,
+        finishedAt: new Date().toISOString(),
+        success: true,
+        error: ''
+      });
+      emitDeployEvent('done', { state: deployState });
+    } catch (e) {
+      pushDeployLog(`ERROR: ${e.message}`);
+      setDeployState({
+        running: false,
+        finishedAt: new Date().toISOString(),
+        success: false,
+        error: e.message
+      });
+      emitDeployEvent('done', { state: deployState });
+    }
+  })();
+}
+
 function isFirstRun() {
   if (!fs.existsSync(CONFIG_PATH)) return true;
   const config = normalizeConfig(JSON.parse(fs.readFileSync(CONFIG_PATH, 'utf8')));
@@ -683,6 +809,41 @@ app.post('/api/install/apps', async (req, res) => {
   } catch (e) {
     res.status(500).json({ ok: false, error: `Install failed: ${e.message}` });
   }
+});
+
+app.get('/api/install/apps/status', (req, res) => {
+  res.json({ ok: true, state: deployState });
+});
+
+app.post('/api/install/apps/start', (req, res) => {
+  try {
+    const cfg = normalizeConfig(readConfig());
+    startDeployJob(cfg);
+    res.json({ ok: true, state: deployState });
+  } catch (e) {
+    res.status(409).json({ ok: false, error: e.message, state: deployState });
+  }
+});
+
+app.get('/api/install/apps/stream', (req, res) => {
+  res.setHeader('Content-Type', 'text/event-stream');
+  res.setHeader('Cache-Control', 'no-cache');
+  res.setHeader('Connection', 'keep-alive');
+  if (typeof res.flushHeaders === 'function') {
+    res.flushHeaders();
+  }
+
+  deployClients.add(res);
+  res.write(`data: ${JSON.stringify({ type: 'snapshot', state: deployState })}\n\n`);
+
+  const heartbeat = setInterval(() => {
+    res.write(': heartbeat\n\n');
+  }, 15000);
+
+  req.on('close', () => {
+    clearInterval(heartbeat);
+    deployClients.delete(res);
+  });
 });
 
 app.post('/container/:name/:action', async (req, res) => {
