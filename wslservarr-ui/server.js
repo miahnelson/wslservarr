@@ -337,10 +337,29 @@ async function testJellyfin(url, apiKey) {
   return { status: 'ok' };
 }
 
+function parseDownloadClientUrl(rawUrl, fallbackPort = 8080) {
+  const text = String(rawUrl || '').trim();
+  if (!text) {
+    return { host: 'sabnzbd', port: Number(fallbackPort || 8080), useSsl: false, urlBase: '' };
+  }
+
+  try {
+    const asUrl = text.includes('://') ? new URL(text) : new URL(`http://${text}`);
+    const host = asUrl.hostname || 'sabnzbd';
+    const useSsl = asUrl.protocol === 'https:';
+    const port = Number(asUrl.port || (useSsl ? 443 : fallbackPort || 8080));
+    const pathname = String(asUrl.pathname || '').replace(/^\/+|\/+$/g, '');
+    return { host, port, useSsl, urlBase: pathname };
+  } catch {
+    return { host: text, port: Number(fallbackPort || 8080), useSsl: false, urlBase: '' };
+  }
+}
+
 async function upsertArrDownloadClient(appName, cfg) {
   const isSonarr = appName === 'sonarr';
   const arr = isSonarr ? cfg.sonarr : cfg.radarr;
   const category = isSonarr ? cfg.sabnzbd.tvCategory : cfg.sabnzbd.movieCategory;
+  const sabConn = parseDownloadClientUrl(cfg.sabnzbd.url, cfg.sabnzbd.port);
 
   const client = apiClient(arr.url, arr.apiKey);
   const schemaRes = await client.get('/api/v3/downloadclient/schema');
@@ -349,7 +368,10 @@ async function upsertArrDownloadClient(appName, cfg) {
 
   const fields = (schema.fields || []).map(f => {
     const next = { ...f };
-    if (f.name === 'host') next.value = cfg.sabnzbd.url;
+    if (f.name === 'host') next.value = sabConn.host;
+    if (f.name === 'port') next.value = sabConn.port;
+    if (f.name === 'useSsl') next.value = sabConn.useSsl;
+    if (f.name === 'urlBase') next.value = sabConn.urlBase;
     if (f.name === 'apiKey') next.value = cfg.sabnzbd.apiKey;
     if (f.name === 'tvCategory') next.value = cfg.sabnzbd.tvCategory;
     if (f.name === 'movieCategory') next.value = cfg.sabnzbd.movieCategory;
@@ -1042,24 +1064,27 @@ app.post('/api/test/:appName', async (req, res) => {
 app.post('/api/apply', async (req, res) => {
   try {
     const cfg = normalizeConfig(readConfig());
+    const canSonarr = !!cfg.sonarr?.apiKey;
+    const canRadarr = !!cfg.radarr?.apiKey;
+    const canSab = !!cfg.sabnzbd?.apiKey;
 
-    if (cfg.newshosting.enabled) {
+    if (cfg.newshosting.enabled && canSab) {
       await upsertSabNewshostingServer(cfg);
     }
 
-    if (cfg.sonarr.enabled && cfg.sonarr.apiKey) {
+    if (canSonarr) {
       await ensureRootFolder('sonarr', cfg);
-      await upsertArrDownloadClient('sonarr', cfg);
+      if (canSab) await upsertArrDownloadClient('sonarr', cfg);
       await upsertArrIndexers('sonarr', cfg);
     }
 
-    if (cfg.radarr.enabled && cfg.radarr.apiKey) {
+    if (canRadarr) {
       await ensureRootFolder('radarr', cfg);
-      await upsertArrDownloadClient('radarr', cfg);
+      if (canSab) await upsertArrDownloadClient('radarr', cfg);
       await upsertArrIndexers('radarr', cfg);
     }
 
-    res.json({ ok: true, message: 'Applied settings to enabled apps (SAB + Arr)' });
+    res.json({ ok: true, message: 'Applied settings to detected apps (SAB + Arr)' });
   } catch (e) {
     res.status(500).json({ ok: false, error: `Apply failed: ${e.message}` });
   }
