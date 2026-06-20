@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 
 const defaultConfig = {
   sonarr: { enabled: false, url: 'http://sonarr:8989', apiKey: '', port: '8989', tvRoot: '/media/tv', composeYaml: '' },
@@ -41,6 +41,8 @@ function App() {
   const [serviceYamlLoading, setServiceYamlLoading] = useState(false);
   const [deployState, setDeployState] = useState({ running: false, startedAt: null, finishedAt: null, success: null, error: '', logs: [] });
   const [showDeployOutput, setShowDeployOutput] = useState(false);
+  const deployStreamInitialized = useRef(false);
+  const lastDeployStartedAt = useRef(null);
 
   const appModalNames = ['sonarr', 'radarr', 'sabnzbd', 'prowlarr', 'jellyfin'];
 
@@ -74,7 +76,18 @@ function App() {
         const payload = JSON.parse(event.data);
         if (payload?.state) {
           setDeployState(payload.state);
-          if (payload.state.running || (Array.isArray(payload.state.logs) && payload.state.logs.length)) {
+
+          const startedAt = payload.state.startedAt || null;
+          const isRunning = !!payload.state.running;
+
+          if (!deployStreamInitialized.current) {
+            deployStreamInitialized.current = true;
+            lastDeployStartedAt.current = startedAt;
+            return;
+          }
+
+          if (isRunning && startedAt && startedAt !== lastDeployStartedAt.current) {
+            lastDeployStartedAt.current = startedAt;
             setShowDeployOutput(true);
           }
         }
@@ -289,18 +302,6 @@ function App() {
     setMessage(data.message || 'API key discovery completed.');
   }
 
-  async function testConnection(appName) {
-    setMessage('');
-    setError('');
-    const res = await fetch(`/api/test/${appName}`, { method: 'POST' });
-    const data = await res.json();
-    if (!res.ok || !data.ok) {
-      setError(data.error || `${appName} test failed`);
-      return;
-    }
-    setMessage(data.message || `${appName} OK`);
-  }
-
   async function containerAction(appName, action) {
     setMessage('');
     setError('');
@@ -324,19 +325,6 @@ function App() {
       return;
     }
     setMessage(`${appName} deployment started.`);
-  }
-
-  async function deployAll() {
-    setMessage('');
-    setError('');
-    setShowDeployOutput(true);
-    const res = await fetch('/api/install/apps/start', { method: 'POST' });
-    const data = await res.json();
-    if (!res.ok || !data.ok) {
-      setError(data.error || 'Deploy failed');
-      return;
-    }
-    setMessage('Deployment started.');
   }
 
   function statusClass(status) {
@@ -409,7 +397,7 @@ function App() {
           <label>Movie Category</label><input value={appConfig.movieCategory || ''} onChange={(e) => update('sabnzbd.movieCategory', e.target.value)} />
         </> : null}
         {app === 'prowlarr' ? <p className="hint" style={{ marginTop: 8 }}>Sonarr/Radarr indexers are managed through Prowlarr only.</p> : null}
-        <p className="hint" style={{ marginTop: 8 }}>This app deploys from its own YAML only. Changes here affect this app when you click Deploy or RestartAll.</p>
+        <p className="hint" style={{ marginTop: 8 }}>This app deploys from its own YAML only. Changes here affect this app when you click Start (if missing), Deploy, or RestartAll.</p>
 
         <label style={{ marginTop: 16 }}>Container Compose YAML</label>
         <textarea className="codebox" value={serviceYamlDraft} onChange={(e) => setServiceYamlDraft(e.target.value)} placeholder={serviceYamlLoading ? 'Loading container YAML...' : ''} disabled={serviceYamlLoading} />
@@ -428,7 +416,6 @@ function App() {
         </div>
         <div className="row">
           <button className="secondary" onClick={loadBootstrap}>Refresh</button>
-          <button onClick={deployAll}>Deploy Enabled</button>
         </div>
       </header>
 
@@ -463,11 +450,11 @@ function App() {
                 <td>{getAppUrl(c.name) ? <a href={getAppUrl(c.name)} target="_blank" rel="noreferrer">{getAppUrl(c.name)}</a> : '-'}</td>
                 <td>
                   <div className="row wrap">
-                    <button type="button" className="secondary" onClick={() => containerAction(c.name, 'start')}>Start</button>
-                    <button type="button" className="secondary" onClick={() => containerAction(c.name, 'stop')}>Stop</button>
+                    <button type="button" className="secondary" onClick={() => containerAction(c.name, c.status === 'running' ? 'stop' : 'start')}>
+                      {c.status === 'running' ? 'Stop' : 'Start'}
+                    </button>
                     <button type="button" className="secondary" onClick={() => containerAction(c.name, 'restart')}>Restart</button>
-                    <button type="button" className="secondary" onClick={() => testConnection(c.name)}>Test</button>
-                    <button type="button" onClick={() => deployApp(c.name)}>Deploy</button>
+                    {c.status === 'missing' ? <button type="button" onClick={() => deployApp(c.name)}>Deploy</button> : null}
                     <button type="button" className="secondary" onClick={() => setConfigModal(c.name)}>Configure</button>
                   </div>
                 </td>

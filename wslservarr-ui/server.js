@@ -958,28 +958,6 @@ function applyComposeHotfixes(composeYaml) {
   );
 }
 
-async function installOrUpdateAppsWithProgress(config, onProgress) {
-  const cfg = normalizeConfig(config);
-  const dirs = ['/srv/config/sonarr', '/srv/config/radarr', '/srv/config/sabnzbd', '/srv/config/prowlarr', '/srv/config/jellyfin', '/srv/downloads', '/srv/media'];
-  if (onProgress) onProgress('Preparing app directories...');
-  for (const d of dirs) {
-    fs.mkdirSync(d, { recursive: true });
-    if (onProgress) onProgress(`Ensured directory: ${d}`);
-  }
-
-  const composeYaml = buildComposeFromIndependentYaml(cfg);
-  fs.writeFileSync(APPS_COMPOSE_PATH, applyComposeHotfixes(composeYaml));
-  if (onProgress) onProgress(`Wrote compose file: ${APPS_COMPOSE_PATH}`);
-
-  if (onProgress) onProgress('Pulling container images...');
-  await runCommandWithProgress('docker', ['compose', '-f', APPS_COMPOSE_PATH, 'pull'], 'pull', onProgress);
-
-  if (onProgress) onProgress('Starting services...');
-  await runCommandWithProgress('docker', ['compose', '-f', APPS_COMPOSE_PATH, 'up', '-d'], 'up', onProgress);
-
-  if (onProgress) onProgress('Deployment completed.');
-}
-
 async function installOrUpdateSingleAppWithProgress(config, appName, onProgress) {
   const cfg = normalizeConfig(config);
   if (!TARGET_CONTAINERS.includes(appName)) {
@@ -1011,9 +989,12 @@ async function installOrUpdateSingleAppWithProgress(config, appName, onProgress)
   if (onProgress) onProgress(`${appName} deployment completed.`);
 }
 
-function startDeployJob(config, appName = null) {
+function startDeployJob(config, appName) {
   if (deployState.running) {
     throw new Error('A deployment is already in progress.');
+  }
+  if (!TARGET_CONTAINERS.includes(appName)) {
+    throw new Error(`Unknown app: ${appName}`);
   }
 
   setDeployState({
@@ -1024,16 +1005,12 @@ function startDeployJob(config, appName = null) {
     error: '',
     logs: []
   });
-  pushDeployLog(appName ? `Deployment started for ${appName}...` : 'Deployment started...');
+  pushDeployLog(`Deployment started for ${appName}...`);
 
   (async () => {
     try {
       const cfg = normalizeConfig(config);
-      if (appName) {
-        await installOrUpdateSingleAppWithProgress(cfg, appName, pushDeployLog);
-      } else {
-        await installOrUpdateAppsWithProgress(cfg, pushDeployLog);
-      }
+      await installOrUpdateSingleAppWithProgress(cfg, appName, pushDeployLog);
 
       pushDeployLog('Running automatic post-deploy app configuration...');
       await applyIntegrationsWithProgress(cfg, appName, pushDeployLog);
@@ -1202,16 +1179,6 @@ app.post('/api/apply', async (req, res) => {
     res.json({ ok: true, message: 'Applied settings to detected apps (SAB + Arr + Prowlarr)' });
   } catch (e) {
     res.status(500).json({ ok: false, error: `Apply failed: ${e.message}` });
-  }
-});
-
-app.post('/api/install/apps/start', (req, res) => {
-  try {
-    const cfg = normalizeConfig(readConfig());
-    startDeployJob(cfg);
-    res.json({ ok: true, state: deployState });
-  } catch (e) {
-    res.status(409).json({ ok: false, error: e.message, state: deployState });
   }
 });
 
