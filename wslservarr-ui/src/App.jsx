@@ -286,12 +286,11 @@ function App() {
       </section>
 
       <section className="card">
-        <h2>Settings</h2>
+        <h2 style={{ marginBottom: 16 }}>Configuration</h2>
 
-        <h3>System Configuration</h3>
-        <div className="grid two">
-          <div>
-            <h4>Paths & Runtime</h4>
+        <details className="card" style={{ marginTop: 8 }}>
+          <summary>Paths & Runtime</summary>
+          <div style={{ paddingTop: 12 }}>
             <label>Media Root</label><input value={config.paths.mediaRoot} onChange={(e) => update('paths.mediaRoot', e.target.value)} />
             <label>Downloads Root</label><input value={config.paths.downloadsRoot} onChange={(e) => update('paths.downloadsRoot', e.target.value)} />
             <label>Config Root</label><input value={config.paths.configRoot || ''} onChange={(e) => update('paths.configRoot', e.target.value)} />
@@ -299,8 +298,11 @@ function App() {
             <label>PUID</label><input value={config.runtime.puid} onChange={(e) => update('runtime.puid', e.target.value)} />
             <label>PGID</label><input value={config.runtime.pgid} onChange={(e) => update('runtime.pgid', e.target.value)} />
           </div>
-          <div>
-            <h4>Newshosting Server (to SAB)</h4>
+        </details>
+
+        <details className="card" style={{ marginTop: 8 }}>
+          <summary>Newshosting Server (to SAB)</summary>
+          <div style={{ paddingTop: 12 }}>
             <label className="check"><input type="checkbox" checked={!!config.newshosting.enabled} onChange={(e) => update('newshosting.enabled', e.target.checked)} /> Enabled</label>
             <label>Name</label><input value={config.newshosting.name} onChange={(e) => update('newshosting.name', e.target.value)} />
             <label>Host</label><input value={config.newshosting.host} onChange={(e) => update('newshosting.host', e.target.value)} />
@@ -312,9 +314,7 @@ function App() {
             <label>Connections</label><input value={config.newshosting.connections} onChange={(e) => update('newshosting.connections', e.target.value)} />
             <label>Retention</label><input value={config.newshosting.retention} onChange={(e) => update('newshosting.retention', e.target.value)} />
           </div>
-        </div>
-
-        <h3 style={{ marginTop: 24 }}>App Configuration</h3>
+        </details>
 
         <details className="card" style={{ marginTop: 8 }}>
           <summary>Sonarr</summary>
