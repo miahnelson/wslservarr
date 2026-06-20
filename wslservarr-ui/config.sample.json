@@ -21,6 +21,12 @@
     "tvCategory": "tv",
     "movieCategory": "movies"
   },
+  "prowlarr": {
+    "enabled": false,
+    "url": "http://prowlarr:9696",
+    "apiKey": "",
+    "port": 9696
+  },
   "jellyfin": {
     "enabled": false,
     "url": "http://jellyfin:8096",
@@ -39,7 +45,6 @@
     "retention": 0,
     "optional": false
   },
-  "indexers": [],
   "paths": {
     "mediaRoot": "/mnt/media",
     "downloadsRoot": "/mnt/downloads"

@@ -13,7 +13,7 @@ const SPA_DIST_PATH = path.join(__dirname, 'dist');
 const PORT = process.env.PORT || 5055;
 const CONFIG_PATH = process.env.CONFIG_PATH || '/data/config.json';
 const DIAGNOSTICS_DIR = process.env.DIAGNOSTICS_DIR || '/data/diagnostics';
-const TARGET_CONTAINERS = ['sonarr', 'radarr', 'sabnzbd', 'jellyfin'];
+const TARGET_CONTAINERS = ['sonarr', 'radarr', 'sabnzbd', 'prowlarr', 'jellyfin'];
 const APPS_COMPOSE_PATH = '/opt/wslservarr/compose.apps.yml';
 const execFileAsync = promisify(execFile);
 const deployClients = new Set();
@@ -152,6 +152,9 @@ function discoverApiKeysFromMountedConfig() {
   const sabKey = readIniKeyValue('/mnt/config/sabnzbd/sabnzbd.ini', 'api_key');
     if (sabKey) found.sabnzbd = sabKey;
 
+  const prowlarrKey = readXmlTagValue('/mnt/config/prowlarr/config.xml', 'ApiKey');
+  if (prowlarrKey) found.prowlarr = prowlarrKey;
+
   return found;
 }
 
@@ -246,6 +249,12 @@ function ensureConfig() {
         tvCategory: 'tv', 
         movieCategory: 'movies'
       },
+      prowlarr: {
+        enabled: false,
+        url: 'http://prowlarr:9696',
+        apiKey: '',
+        port: 9696
+      },
       jellyfin: {
         enabled: false,
         url: 'http://jellyfin:8096',
@@ -264,7 +273,6 @@ function ensureConfig() {
         retention: 0,
         optional: false
       },
-      indexers: [],
       paths: { 
         mediaRoot: '/mnt/media',
         downloadsRoot: '/mnt/downloads'
@@ -333,6 +341,18 @@ async function testJellyfin(url, apiKey) {
   });
   if (!res.data || typeof res.data !== 'object') {
     throw new Error('Invalid Jellyfin response');
+  }
+  return { status: 'ok' };
+}
+
+async function testProwlarr(url, apiKey) {
+  const base = `${String(url || '').replace(/\/$/, '')}`;
+  const res = await axios.get(`${base}/api/v1/system/status`, {
+    timeout: 10000,
+    headers: { 'X-Api-Key': apiKey }
+  });
+  if (!res.data || typeof res.data !== 'object') {
+    throw new Error('Invalid Prowlarr response');
   }
   return { status: 'ok' };
 }
@@ -455,51 +475,44 @@ function buildNewznabFields(schemaFields, entry) {
   });
 }
 
-async function upsertArrIndexers(appName, cfg) {
+async function upsertArrProwlarrIndexer(appName, cfg) {
   const arr = appName === 'sonarr' ? cfg.sonarr : cfg.radarr;
   if (!arr?.enabled || !arr?.apiKey) return;
-
-  const indexers = Array.isArray(cfg.indexers)
-    ? cfg.indexers.filter(i => i && i.url && i.apiKey)
-    : [];
-  if (!indexers.length) return;
+  if (!cfg?.prowlarr?.enabled || !cfg?.prowlarr?.apiKey) return;
 
   const client = apiClient(arr.url, arr.apiKey);
   const schemaRes = await client.get('/api/v3/indexer/schema');
-  const schema = (schemaRes.data || []).find(s => String(s.implementationName || '').toLowerCase().includes('newznab'));
-  if (!schema) throw new Error(`${appName}: Newznab schema not found`);
+  const schema = (schemaRes.data || []).find(s => String(s.implementationName || '').toLowerCase().includes('prowlarr'));
+  if (!schema) throw new Error(`${appName}: Prowlarr indexer schema not found`);
 
   const listRes = await client.get('/api/v3/indexer');
   const existingList = Array.isArray(listRes.data) ? listRes.data : [];
+  const existing = existingList.find(ix => String(ix.implementationName || '').toLowerCase().includes('prowlarr'));
 
-  for (let idx = 0; idx < indexers.length; idx++) {
-    const entry = indexers[idx];
-    const fields = buildNewznabFields(schema.fields, entry);
+  const fields = (schema.fields || []).map(f => {
+    const next = { ...f };
+    if (f.name === 'prowlarrUrl' || f.name === 'baseUrl' || f.name === 'url') next.value = cfg.prowlarr.url;
+    if (f.name === 'apiKey') next.value = cfg.prowlarr.apiKey;
+    return next;
+  });
 
-    const existing = existingList.find(ix => {
-      if (ix.name === entry.name) return true;
-      const baseUrl = (ix.fields || []).find(f => f.name === 'baseUrl' || f.name === 'url')?.value;
-      return baseUrl === entry.url;
-    });
+  const payload = {
+    ...(existing || {}),
+    enable: true,
+    name: 'Prowlarr',
+    implementation: schema.implementation,
+    implementationName: schema.implementationName,
+    configContract: schema.configContract,
+    protocol: schema.protocol || existing?.protocol || 'usenet',
+    priority: Number(existing?.priority || 25),
+    fields,
+    tags: existing?.tags || []
+  };
 
-    const payload = {
-      ...(existing || {}),
-      enable: true,
-      name: entry.name || `Indexer ${idx + 1}`,
-      implementation: schema.implementation,
-      implementationName: schema.implementationName,
-      configContract: schema.configContract,
-      protocol: 'usenet',
-      priority: Number(entry.priority || existing?.priority || 25),
-      fields,
-      tags: existing?.tags || []
-    };
-
-    if (existing?.id) {
-      await client.put(`/api/v3/indexer/${existing.id}`, payload);
-    } else {
-      await client.post('/api/v3/indexer', payload);
-    }
+  if (existing?.id) {
+    await client.put(`/api/v3/indexer/${existing.id}`, payload);
+  } else {
+    await client.post('/api/v3/indexer', payload);
   }
 }
 
@@ -530,9 +543,11 @@ async function applyIntegrationsWithProgress(cfg, appName = null, onProgress) {
       onProgress(`Skipping ${app} SABnzbd downloader setup (SAB disabled or API key missing).`);
     }
 
-    if (Array.isArray(cfg.indexers) && cfg.indexers.length) {
-      if (onProgress) onProgress(`Applying ${app} indexers...`);
-      await retryAsync(() => upsertArrIndexers(app, cfg), 8, 2500);
+    if (cfg.prowlarr?.enabled && cfg.prowlarr?.apiKey) {
+      if (onProgress) onProgress(`Applying ${app} Prowlarr indexer...`);
+      await retryAsync(() => upsertArrProwlarrIndexer(app, cfg), 8, 2500);
+    } else if (onProgress) {
+      onProgress(`Skipping ${app} Prowlarr indexer setup (Prowlarr disabled or API key missing).`);
     }
   }
 }
@@ -576,6 +591,7 @@ function normalizeConfig(config) {
   next.sonarr = next.sonarr || { enabled: false, url: 'http://sonarr:8989', apiKey: '', port: '8989', tvRoot: '/media/tv' };
   next.radarr = next.radarr || { enabled: false, url: 'http://radarr:7878', apiKey: '', port: '7878', movieRoot: '/media/movies' };
   next.sabnzbd = next.sabnzbd || { enabled: false, url: 'http://sabnzbd:8080', apiKey: '', port: '8080', tvCategory: 'tv', movieCategory: 'movies' };
+  next.prowlarr = next.prowlarr || { enabled: false, url: 'http://prowlarr:9696', apiKey: '', port: '9696' };
   next.jellyfin = next.jellyfin || { enabled: false, url: 'http://jellyfin:8096', apiKey: '', port: '8096' };
   next.newshosting = next.newshosting || {
     enabled: false,
@@ -589,7 +605,7 @@ function normalizeConfig(config) {
     retention: 0,
     optional: false
   };
-  next.indexers = Array.isArray(next.indexers) ? next.indexers : [];
+  if (next.indexers && !Array.isArray(next.indexers)) next.indexers = [];
   next.paths = next.paths || { mediaRoot: '/mnt/media', downloadsRoot: '/mnt/downloads' };
   if (typeof next.sonarr.tvRoot === 'string' && next.sonarr.tvRoot.startsWith('/mnt/media')) {
     next.sonarr.tvRoot = next.sonarr.tvRoot.replace('/mnt/media', '/media');
@@ -638,6 +654,12 @@ function buildConfigFromBody(body) {
       tvCategory: body.tvCategory || 'tv',
       movieCategory: body.movieCategory || 'movies'
     },
+    prowlarr: {
+      enabled: body.prowlarrEnabled === 'on' || body.prowlarrEnabled === true,
+      url: body.prowlarrUrl || prev.prowlarr.url || 'http://prowlarr:9696',
+      apiKey: body.prowlarrApiKey || '',
+      port: body.prowlarrPort || '9696'
+    },
     jellyfin: {
       enabled: body.jellyfinEnabled === 'on' || body.jellyfinEnabled === true,
       url: body.jellyfinUrl || prev.jellyfin.url || 'http://jellyfin:8096',
@@ -656,7 +678,7 @@ function buildConfigFromBody(body) {
       retention: body.newshostingRetention || prev.newshosting.retention || 0,
       optional: body.newshostingOptional === true || body.newshostingOptional === 'on'
     },
-    indexers: Array.isArray(body.indexers) ? body.indexers : (Array.isArray(prev.indexers) ? prev.indexers : []),
+    indexers: Array.isArray(prev.indexers) ? prev.indexers : [],
     paths: {
       mediaRoot: body.mediaRoot || '/mnt/media',
       downloadsRoot: body.downloadsRoot || '/mnt/downloads',
@@ -753,6 +775,23 @@ function buildAppsCompose(cfg) {
 `;
   }
 
+  if (cfg.prowlarr.enabled) {
+    compose += `  prowlarr:
+    image: lscr.io/linuxserver/prowlarr:latest
+    container_name: prowlarr
+    environment:
+      - PUID=${puid}
+      - PGID=${pgid}
+      - TZ=${tz}
+    volumes:
+      - /mnt/config/prowlarr:/config
+    ports:
+      - "${cfg.prowlarr.port}:9696"
+    restart: unless-stopped
+
+`;
+  }
+
   if (cfg.jellyfin.enabled) {
     compose += `  jellyfin:
     image: lscr.io/linuxserver/jellyfin:latest
@@ -841,7 +880,7 @@ function applyComposeHotfixes(composeYaml) {
 
 async function installOrUpdateAppsWithProgress(config, onProgress) {
   const cfg = normalizeConfig(config);
-  const dirs = ['/srv/config/sonarr', '/srv/config/radarr', '/srv/config/sabnzbd', '/srv/config/jellyfin', '/srv/downloads', '/srv/media'];
+  const dirs = ['/srv/config/sonarr', '/srv/config/radarr', '/srv/config/sabnzbd', '/srv/config/prowlarr', '/srv/config/jellyfin', '/srv/downloads', '/srv/media'];
   if (onProgress) onProgress('Preparing app directories...');
   for (const d of dirs) {
     fs.mkdirSync(d, { recursive: true });
@@ -867,7 +906,7 @@ async function installOrUpdateSingleAppWithProgress(config, appName, onProgress)
     throw new Error(`Unknown app: ${appName}`);
   }
 
-  const dirs = ['/srv/config/sonarr', '/srv/config/radarr', '/srv/config/sabnzbd', '/srv/config/jellyfin', '/srv/downloads', '/srv/media'];
+  const dirs = ['/srv/config/sonarr', '/srv/config/radarr', '/srv/config/sabnzbd', '/srv/config/prowlarr', '/srv/config/jellyfin', '/srv/downloads', '/srv/media'];
   if (onProgress) onProgress(`Preparing directories for ${appName}...`);
   for (const d of dirs) {
     fs.mkdirSync(d, { recursive: true });
@@ -981,6 +1020,7 @@ app.post('/api/discover-keys', (req, res) => {
     if (found.sonarr) cfg.sonarr.apiKey = found.sonarr;
     if (found.radarr) cfg.radarr.apiKey = found.radarr;
     if (found.sabnzbd) cfg.sabnzbd.apiKey = found.sabnzbd;
+    if (found.prowlarr) cfg.prowlarr.apiKey = found.prowlarr;
 
     writeConfig(cfg);
 
@@ -1052,6 +1092,7 @@ app.post('/api/test/:appName', async (req, res) => {
     if (appName === 'sonarr') await testArr(cfg.sonarr.url, cfg.sonarr.apiKey);
     else if (appName === 'radarr') await testArr(cfg.radarr.url, cfg.radarr.apiKey);
     else if (appName === 'sabnzbd') await testSab(cfg.sabnzbd.url, cfg.sabnzbd.apiKey);
+    else if (appName === 'prowlarr') await testProwlarr(cfg.prowlarr.url, cfg.prowlarr.apiKey);
     else if (appName === 'jellyfin') await testJellyfin(cfg.jellyfin.url, cfg.jellyfin.apiKey);
     else throw new Error('Unknown app');
 
@@ -1067,6 +1108,7 @@ app.post('/api/apply', async (req, res) => {
     const canSonarr = !!cfg.sonarr?.apiKey;
     const canRadarr = !!cfg.radarr?.apiKey;
     const canSab = !!cfg.sabnzbd?.apiKey;
+    const canProwlarr = !!cfg.prowlarr?.apiKey;
 
     if (cfg.newshosting.enabled && canSab) {
       await upsertSabNewshostingServer(cfg);
@@ -1075,16 +1117,16 @@ app.post('/api/apply', async (req, res) => {
     if (canSonarr) {
       await ensureRootFolder('sonarr', cfg);
       if (canSab) await upsertArrDownloadClient('sonarr', cfg);
-      await upsertArrIndexers('sonarr', cfg);
+      if (canProwlarr) await upsertArrProwlarrIndexer('sonarr', cfg);
     }
 
     if (canRadarr) {
       await ensureRootFolder('radarr', cfg);
       if (canSab) await upsertArrDownloadClient('radarr', cfg);
-      await upsertArrIndexers('radarr', cfg);
+      if (canProwlarr) await upsertArrProwlarrIndexer('radarr', cfg);
     }
 
-    res.json({ ok: true, message: 'Applied settings to detected apps (SAB + Arr)' });
+    res.json({ ok: true, message: 'Applied settings to detected apps (SAB + Arr + Prowlarr)' });
   } catch (e) {
     res.status(500).json({ ok: false, error: `Apply failed: ${e.message}` });
   }

@@ -4,9 +4,9 @@ const defaultConfig = {
   sonarr: { enabled: false, url: 'http://sonarr:8989', apiKey: '', port: '8989', tvRoot: '/media/tv' },
   radarr: { enabled: false, url: 'http://radarr:7878', apiKey: '', port: '7878', movieRoot: '/media/movies' },
   sabnzbd: { enabled: false, url: 'http://sabnzbd:8080', apiKey: '', port: '8080', tvCategory: 'tv', movieCategory: 'movies' },
+  prowlarr: { enabled: false, url: 'http://prowlarr:9696', apiKey: '', port: '9696' },
   jellyfin: { enabled: false, url: 'http://jellyfin:8096', apiKey: '', port: '8096' },
   newshosting: { enabled: false, name: 'newshosting', host: 'news.newshosting.com', port: 563, username: '', password: '', ssl: true, connections: 40, retention: 0, optional: false },
-  indexers: [],
   paths: { mediaRoot: '/mnt/media', downloadsRoot: '/mnt/downloads', configRoot: '/mnt/config' },
   runtime: { timezone: 'America/New_York', puid: '1000', pgid: '1000' },
   composeYaml: ''
@@ -20,11 +20,11 @@ function mergeConfig(input) {
     sonarr: { ...defaultConfig.sonarr, ...(cfg.sonarr || {}) },
     radarr: { ...defaultConfig.radarr, ...(cfg.radarr || {}) },
     sabnzbd: { ...defaultConfig.sabnzbd, ...(cfg.sabnzbd || {}) },
+    prowlarr: { ...defaultConfig.prowlarr, ...(cfg.prowlarr || {}) },
     jellyfin: { ...defaultConfig.jellyfin, ...(cfg.jellyfin || {}) },
     newshosting: { ...defaultConfig.newshosting, ...(cfg.newshosting || {}) },
     paths: { ...defaultConfig.paths, ...(cfg.paths || {}) },
-    runtime: { ...defaultConfig.runtime, ...(cfg.runtime || {}) },
-    indexers: Array.isArray(cfg.indexers) ? cfg.indexers : []
+    runtime: { ...defaultConfig.runtime, ...(cfg.runtime || {}) }
   };
 }
 
@@ -32,11 +32,10 @@ function App() {
   const [loading, setLoading] = useState(true);
   const [config, setConfig] = useState(defaultConfig);
   const [containers, setContainers] = useState([]);
-  const [indexersJson, setIndexersJson] = useState('[]');
   const [message, setMessage] = useState('');
   const [error, setError] = useState('');
   const [saving, setSaving] = useState(false);
-  const [showApiKeys, setShowApiKeys] = useState({ sonarr: false, radarr: false, sabnzbd: false, jellyfin: false });
+  const [showApiKeys, setShowApiKeys] = useState({ sonarr: false, radarr: false, sabnzbd: false, prowlarr: false, jellyfin: false });
 
   const runningCount = useMemo(() => containers.filter((c) => c.status === 'running').length, [containers]);
 
@@ -47,7 +46,6 @@ function App() {
       const data = await res.json();
       const next = mergeConfig(data.config);
       setConfig(next);
-      setIndexersJson(JSON.stringify(next.indexers || [], null, 2));
       setContainers(Array.isArray(data.containers) ? data.containers : []);
       setError('');
     } catch (e) {
@@ -76,6 +74,7 @@ function App() {
     if (appName === 'sonarr') return `http://localhost:${config?.sonarr?.port || 8989}`;
     if (appName === 'radarr') return `http://localhost:${config?.radarr?.port || 7878}`;
     if (appName === 'sabnzbd') return `http://localhost:${config?.sabnzbd?.port || 8080}`;
+    if (appName === 'prowlarr') return `http://localhost:${config?.prowlarr?.port || 9696}`;
     if (appName === 'jellyfin') return `http://localhost:${config?.jellyfin?.port || 8096}`;
     return '';
   }
@@ -87,15 +86,6 @@ function App() {
   async function saveConfig() {
     setMessage('');
     setError('');
-
-    let parsedIndexers = [];
-    try {
-      parsedIndexers = JSON.parse(indexersJson || '[]');
-      if (!Array.isArray(parsedIndexers)) throw new Error('Indexers must be a JSON array');
-    } catch (e) {
-      setError(`Invalid indexers JSON: ${e.message}`);
-      return;
-    }
 
     const payload = {
       sonarrEnabled: config.sonarr.enabled,
@@ -114,6 +104,10 @@ function App() {
       sabPort: config.sabnzbd.port,
       tvCategory: config.sabnzbd.tvCategory,
       movieCategory: config.sabnzbd.movieCategory,
+      prowlarrEnabled: config.prowlarr.enabled,
+      prowlarrUrl: config.prowlarr.url,
+      prowlarrApiKey: config.prowlarr.apiKey,
+      prowlarrPort: config.prowlarr.port,
       jellyfinEnabled: config.jellyfin.enabled,
       jellyfinUrl: config.jellyfin.url,
       jellyfinApiKey: config.jellyfin.apiKey,
@@ -128,7 +122,6 @@ function App() {
       newshostingConnections: config.newshosting.connections,
       newshostingRetention: config.newshosting.retention,
       newshostingOptional: config.newshosting.optional,
-      indexers: parsedIndexers,
       mediaRoot: config.paths.mediaRoot,
       downloadsRoot: config.paths.downloadsRoot,
       configRoot: config.paths.configRoot,
@@ -152,7 +145,6 @@ function App() {
       }
       const next = mergeConfig(data.config);
       setConfig(next);
-      setIndexersJson(JSON.stringify(next.indexers || [], null, 2));
       setMessage('Configuration saved.');
     } catch (e) {
       setError(e.message);
@@ -296,9 +288,10 @@ function App() {
       <section className="card">
         <h2>Settings</h2>
 
+        <h3>System Configuration</h3>
         <div className="grid two">
           <div>
-            <h3>Paths & Runtime</h3>
+            <h4>Paths & Runtime</h4>
             <label>Media Root</label><input value={config.paths.mediaRoot} onChange={(e) => update('paths.mediaRoot', e.target.value)} />
             <label>Downloads Root</label><input value={config.paths.downloadsRoot} onChange={(e) => update('paths.downloadsRoot', e.target.value)} />
             <label>Config Root</label><input value={config.paths.configRoot || ''} onChange={(e) => update('paths.configRoot', e.target.value)} />
@@ -306,50 +299,8 @@ function App() {
             <label>PUID</label><input value={config.runtime.puid} onChange={(e) => update('runtime.puid', e.target.value)} />
             <label>PGID</label><input value={config.runtime.pgid} onChange={(e) => update('runtime.pgid', e.target.value)} />
           </div>
-
           <div>
-            <h3>App Endpoints</h3>
-            <label className="check"><input type="checkbox" checked={!!config.sonarr.enabled} onChange={(e) => update('sonarr.enabled', e.target.checked)} /> Sonarr Enabled</label>
-            <label>Sonarr URL</label><input value={config.sonarr.url} onChange={(e) => update('sonarr.url', e.target.value)} />
-            <label>Sonarr Port</label><input value={config.sonarr.port} onChange={(e) => update('sonarr.port', e.target.value)} />
-            <label>Sonarr API Key ({config.sonarr.apiKey ? 'set' : 'not set'})</label>
-            <div className="row wrap">
-              <input type={showApiKeys.sonarr ? 'text' : 'password'} value={config.sonarr.apiKey} onChange={(e) => update('sonarr.apiKey', e.target.value)} />
-              <button className="secondary" onClick={() => toggleShowApiKey('sonarr')}>{showApiKeys.sonarr ? 'Hide' : 'Show'}</button>
-            </div>
-
-            <label className="check"><input type="checkbox" checked={!!config.radarr.enabled} onChange={(e) => update('radarr.enabled', e.target.checked)} /> Radarr Enabled</label>
-            <label>Radarr URL</label><input value={config.radarr.url} onChange={(e) => update('radarr.url', e.target.value)} />
-            <label>Radarr Port</label><input value={config.radarr.port} onChange={(e) => update('radarr.port', e.target.value)} />
-            <label>Radarr API Key ({config.radarr.apiKey ? 'set' : 'not set'})</label>
-            <div className="row wrap">
-              <input type={showApiKeys.radarr ? 'text' : 'password'} value={config.radarr.apiKey} onChange={(e) => update('radarr.apiKey', e.target.value)} />
-              <button className="secondary" onClick={() => toggleShowApiKey('radarr')}>{showApiKeys.radarr ? 'Hide' : 'Show'}</button>
-            </div>
-
-            <label className="check"><input type="checkbox" checked={!!config.sabnzbd.enabled} onChange={(e) => update('sabnzbd.enabled', e.target.checked)} /> SABnzbd Enabled</label>
-            <label>SABnzbd URL</label><input value={config.sabnzbd.url} onChange={(e) => update('sabnzbd.url', e.target.value)} />
-            <label>SABnzbd Port</label><input value={config.sabnzbd.port} onChange={(e) => update('sabnzbd.port', e.target.value)} />
-            <label>SABnzbd API Key ({config.sabnzbd.apiKey ? 'set' : 'not set'})</label>
-            <div className="row wrap">
-              <input type={showApiKeys.sabnzbd ? 'text' : 'password'} value={config.sabnzbd.apiKey} onChange={(e) => update('sabnzbd.apiKey', e.target.value)} />
-              <button className="secondary" onClick={() => toggleShowApiKey('sabnzbd')}>{showApiKeys.sabnzbd ? 'Hide' : 'Show'}</button>
-            </div>
-
-            <label className="check"><input type="checkbox" checked={!!config.jellyfin.enabled} onChange={(e) => update('jellyfin.enabled', e.target.checked)} /> Jellyfin Enabled</label>
-            <label>Jellyfin URL</label><input value={config.jellyfin.url} onChange={(e) => update('jellyfin.url', e.target.value)} />
-            <label>Jellyfin Port</label><input value={config.jellyfin.port} onChange={(e) => update('jellyfin.port', e.target.value)} />
-            <label>Jellyfin API Key ({config.jellyfin.apiKey ? 'set' : 'not set'})</label>
-            <div className="row wrap">
-              <input type={showApiKeys.jellyfin ? 'text' : 'password'} value={config.jellyfin.apiKey} onChange={(e) => update('jellyfin.apiKey', e.target.value)} />
-              <button className="secondary" onClick={() => toggleShowApiKey('jellyfin')}>{showApiKeys.jellyfin ? 'Hide' : 'Show'}</button>
-            </div>
-          </div>
-        </div>
-
-        <div className="grid two">
-          <div>
-            <h3>Newshosting (to SAB)</h3>
+            <h4>Newshosting Server (to SAB)</h4>
             <label className="check"><input type="checkbox" checked={!!config.newshosting.enabled} onChange={(e) => update('newshosting.enabled', e.target.checked)} /> Enabled</label>
             <label>Name</label><input value={config.newshosting.name} onChange={(e) => update('newshosting.name', e.target.value)} />
             <label>Host</label><input value={config.newshosting.host} onChange={(e) => update('newshosting.host', e.target.value)} />
@@ -361,34 +312,94 @@ function App() {
             <label>Connections</label><input value={config.newshosting.connections} onChange={(e) => update('newshosting.connections', e.target.value)} />
             <label>Retention</label><input value={config.newshosting.retention} onChange={(e) => update('newshosting.retention', e.target.value)} />
           </div>
-
-          <div>
-            <h3>Indexers (to Sonarr/Radarr)</h3>
-            <p className="hint">JSON array format.</p>
-            <textarea className="codebox" value={indexersJson} onChange={(e) => setIndexersJson(e.target.value)} />
-          </div>
         </div>
+
+        <h3 style={{ marginTop: 24 }}>App Configuration</h3>
+
+        <details className="card" style={{ marginTop: 8 }}>
+          <summary>Sonarr</summary>
+          <div style={{ paddingTop: 12 }}>
+            <label className="check"><input type="checkbox" checked={!!config.sonarr.enabled} onChange={(e) => update('sonarr.enabled', e.target.checked)} /> Enabled</label>
+            <label>URL</label><input value={config.sonarr.url} onChange={(e) => update('sonarr.url', e.target.value)} />
+            <label>Port</label><input value={config.sonarr.port} onChange={(e) => update('sonarr.port', e.target.value)} />
+            <label>API Key ({config.sonarr.apiKey ? 'set' : 'not set'})</label>
+            <div className="row wrap">
+              <input type={showApiKeys.sonarr ? 'text' : 'password'} value={config.sonarr.apiKey} onChange={(e) => update('sonarr.apiKey', e.target.value)} />
+              <button className="secondary" onClick={() => toggleShowApiKey('sonarr')}>{showApiKeys.sonarr ? 'Hide' : 'Show'}</button>
+            </div>
+            <label>TV Root</label><input value={config.sonarr.tvRoot} onChange={(e) => update('sonarr.tvRoot', e.target.value)} />
+          </div>
+        </details>
+
+        <details className="card" style={{ marginTop: 8 }}>
+          <summary>Radarr</summary>
+          <div style={{ paddingTop: 12 }}>
+            <label className="check"><input type="checkbox" checked={!!config.radarr.enabled} onChange={(e) => update('radarr.enabled', e.target.checked)} /> Enabled</label>
+            <label>URL</label><input value={config.radarr.url} onChange={(e) => update('radarr.url', e.target.value)} />
+            <label>Port</label><input value={config.radarr.port} onChange={(e) => update('radarr.port', e.target.value)} />
+            <label>API Key ({config.radarr.apiKey ? 'set' : 'not set'})</label>
+            <div className="row wrap">
+              <input type={showApiKeys.radarr ? 'text' : 'password'} value={config.radarr.apiKey} onChange={(e) => update('radarr.apiKey', e.target.value)} />
+              <button className="secondary" onClick={() => toggleShowApiKey('radarr')}>{showApiKeys.radarr ? 'Hide' : 'Show'}</button>
+            </div>
+            <label>Movie Root</label><input value={config.radarr.movieRoot} onChange={(e) => update('radarr.movieRoot', e.target.value)} />
+          </div>
+        </details>
+
+        <details className="card" style={{ marginTop: 8 }}>
+          <summary>SABnzbd</summary>
+          <div style={{ paddingTop: 12 }}>
+            <label className="check"><input type="checkbox" checked={!!config.sabnzbd.enabled} onChange={(e) => update('sabnzbd.enabled', e.target.checked)} /> Enabled</label>
+            <label>URL</label><input value={config.sabnzbd.url} onChange={(e) => update('sabnzbd.url', e.target.value)} />
+            <label>Port</label><input value={config.sabnzbd.port} onChange={(e) => update('sabnzbd.port', e.target.value)} />
+            <label>API Key ({config.sabnzbd.apiKey ? 'set' : 'not set'})</label>
+            <div className="row wrap">
+              <input type={showApiKeys.sabnzbd ? 'text' : 'password'} value={config.sabnzbd.apiKey} onChange={(e) => update('sabnzbd.apiKey', e.target.value)} />
+              <button className="secondary" onClick={() => toggleShowApiKey('sabnzbd')}>{showApiKeys.sabnzbd ? 'Hide' : 'Show'}</button>
+            </div>
+            <label>TV Category</label><input value={config.sabnzbd.tvCategory} onChange={(e) => update('sabnzbd.tvCategory', e.target.value)} />
+            <label>Movie Category</label><input value={config.sabnzbd.movieCategory} onChange={(e) => update('sabnzbd.movieCategory', e.target.value)} />
+          </div>
+        </details>
+
+        <details className="card" style={{ marginTop: 8 }}>
+          <summary>Prowlarr</summary>
+          <div style={{ paddingTop: 12 }}>
+            <label className="check"><input type="checkbox" checked={!!config.prowlarr.enabled} onChange={(e) => update('prowlarr.enabled', e.target.checked)} /> Enabled</label>
+            <label>URL</label><input value={config.prowlarr.url} onChange={(e) => update('prowlarr.url', e.target.value)} />
+            <label>Port</label><input value={config.prowlarr.port} onChange={(e) => update('prowlarr.port', e.target.value)} />
+            <label>API Key ({config.prowlarr.apiKey ? 'set' : 'not set'})</label>
+            <div className="row wrap">
+              <input type={showApiKeys.prowlarr ? 'text' : 'password'} value={config.prowlarr.apiKey} onChange={(e) => update('prowlarr.apiKey', e.target.value)} />
+              <button className="secondary" onClick={() => toggleShowApiKey('prowlarr')}>{showApiKeys.prowlarr ? 'Hide' : 'Show'}</button>
+            </div>
+            <p className="hint" style={{ marginTop: 8 }}>Sonarr/Radarr indexers are managed through Prowlarr only.</p>
+          </div>
+        </details>
+
+        <details className="card" style={{ marginTop: 8 }}>
+          <summary>Jellyfin</summary>
+          <div style={{ paddingTop: 12 }}>
+            <label className="check"><input type="checkbox" checked={!!config.jellyfin.enabled} onChange={(e) => update('jellyfin.enabled', e.target.checked)} /> Enabled</label>
+            <label>URL</label><input value={config.jellyfin.url} onChange={(e) => update('jellyfin.url', e.target.value)} />
+            <label>Port</label><input value={config.jellyfin.port} onChange={(e) => update('jellyfin.port', e.target.value)} />
+            <label>API Key ({config.jellyfin.apiKey ? 'set' : 'not set'})</label>
+            <div className="row wrap">
+              <input type={showApiKeys.jellyfin ? 'text' : 'password'} value={config.jellyfin.apiKey} onChange={(e) => update('jellyfin.apiKey', e.target.value)} />
+              <button className="secondary" onClick={() => toggleShowApiKey('jellyfin')}>{showApiKeys.jellyfin ? 'Hide' : 'Show'}</button>
+            </div>
+          </div>
+        </details>
 
         <details className="card" style={{ marginTop: 8 }}>
           <summary>Advanced</summary>
-          <div className="grid two" style={{ marginTop: 10 }}>
-            <div>
-              <h3>App Media Paths</h3>
-              <label>Sonarr TV Root</label><input value={config.sonarr.tvRoot} onChange={(e) => update('sonarr.tvRoot', e.target.value)} />
-              <label>Radarr Movie Root</label><input value={config.radarr.movieRoot} onChange={(e) => update('radarr.movieRoot', e.target.value)} />
-            </div>
-            <div>
-              <h3>SAB Categories</h3>
-              <label>TV Category</label><input value={config.sabnzbd.tvCategory} onChange={(e) => update('sabnzbd.tvCategory', e.target.value)} />
-              <label>Movie Category</label><input value={config.sabnzbd.movieCategory} onChange={(e) => update('sabnzbd.movieCategory', e.target.value)} />
-            </div>
+          <div style={{ paddingTop: 12 }}>
+            <h4>Compose YAML</h4>
+            <textarea className="codebox" value={config.composeYaml || ''} onChange={(e) => update('composeYaml', e.target.value)} />
           </div>
-
-          <h3>Compose YAML</h3>
-          <textarea className="codebox" value={config.composeYaml || ''} onChange={(e) => update('composeYaml', e.target.value)} />
         </details>
 
-        <div className="row">
+        <div className="row" style={{ marginTop: 16 }}>
           <button onClick={saveConfig} disabled={saving}>{saving ? 'Saving...' : 'Save Settings'}</button>
           <button className="secondary" onClick={applySettings}>Apply to Apps</button>
           <button className="secondary" onClick={discoverApiKeys}>Auto-Fill API Keys</button>
