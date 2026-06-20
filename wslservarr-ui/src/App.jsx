@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
+import appIcon from './static/WSLServarr.png';
 
 const defaultConfig = {
   sonarr: { enabled: false, url: 'http://sonarr:8989', apiKey: '', port: '8989', tvRoot: '/media/tv', composeYaml: '' },
@@ -76,6 +77,19 @@ function App() {
 
   useEffect(() => {
     loadBootstrap();
+  }, []);
+
+  useEffect(() => {
+    if (typeof document === 'undefined') return;
+    document.title = 'WSLServarr UI';
+
+    let link = document.querySelector("link[rel='icon']");
+    if (!link) {
+      link = document.createElement('link');
+      link.setAttribute('rel', 'icon');
+      document.head.appendChild(link);
+    }
+    link.setAttribute('href', appIcon);
   }, []);
 
   useEffect(() => {
@@ -478,13 +492,26 @@ function App() {
     );
   }
 
-  if (loading) return <div className="page"><h1>WSLServarr</h1><p>Loading...</p></div>;
+  if (loading) {
+    return (
+      <div className="page">
+        <div className="app-brand">
+          <img src={appIcon} alt="WSLServarr" className="app-logo" />
+          <h1>WSLServarr</h1>
+        </div>
+        <p>Loading...</p>
+      </div>
+    );
+  }
 
   return (
     <div className="page">
       <header className="topbar">
         <div>
-          <h1>WSLServarr</h1>
+          <div className="app-brand">
+            <img src={appIcon} alt="WSLServarr" className="app-logo" />
+            <h1>WSLServarr</h1>
+          </div>
           <p className="subtitle">Simple media stack control panel</p>
         </div>
         <div className="row">

@@ -63,6 +63,26 @@ function Invoke-Wsl {
     }
 }
 
+function Invoke-WslCapture {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Distro,
+        [Parameter(Mandatory = $true)]
+        [string]$Script
+    )
+
+    $normalizedScript = $Script -replace "`r", ""
+    $normalizedScript = "export HOME=/root`n$normalizedScript"
+    $encoded = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($normalizedScript))
+    $cmd = "echo $encoded | base64 -d | bash"
+    $output = & wsl -d $Distro -u root -- bash -lc $cmd 2>&1
+    if ($LASTEXITCODE -ne 0) {
+        $details = if ($output) { ($output | Out-String).Trim() } else { "(no output)" }
+        throw "WSL command failed in distro '$Distro' with exit code $LASTEXITCODE`n$details"
+    }
+    return (($output | Out-String).Trim())
+}
+
 function Invoke-WslRoot {
     param(
         [Parameter(Mandatory = $true)]
@@ -96,6 +116,111 @@ function Sync-LocalUiToWsl {
     }
 }
 
+function Test-RunningAsAdministrator {
+    $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
+    $principal = New-Object Security.Principal.WindowsPrincipal($identity)
+    return $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+}
+
+function Get-WslIpv4Address {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Distro
+    )
+
+    $ip = Invoke-WslCapture -Distro $Distro -Script @'
+ip -o -4 addr show eth0 | awk '{print $4}' | cut -d/ -f1
+'@
+    $ip = $ip.Trim()
+    if ([string]::IsNullOrWhiteSpace($ip)) {
+        $fallback = Invoke-WslCapture -Distro $Distro -Script 'hostname -I'
+        $ip = (($fallback -split "\s+") | Where-Object { $_ -match '^\d+\.\d+\.\d+\.\d+$' } | Select-Object -First 1)
+    }
+    return [string]$ip
+}
+
+function Get-WslServarrConfig {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Distro
+    )
+
+    $raw = Invoke-WslCapture -Distro $Distro -Script 'cat /mnt/config/wslservarr-ui/config.json'
+    if ([string]::IsNullOrWhiteSpace($raw)) {
+        return $null
+    }
+
+    return $raw | ConvertFrom-Json
+}
+
+function Sync-HostPortAccess {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Distro
+    )
+
+    if (-not (Test-RunningAsAdministrator)) {
+        throw "LAN port forwarding requires Administrator privileges. Re-run PowerShell as Administrator and run .\\wslservarr.ps1 again."
+    }
+
+    $cfg = $null
+    try {
+        $cfg = Get-WslServarrConfig -Distro $Distro
+    } catch {
+        Write-Warning "Skipping LAN port forwarding setup because config could not be read: $($_.Exception.Message)"
+        return
+    }
+
+    if (-not $cfg) {
+        Write-Warning "Skipping LAN port forwarding setup because no config was found."
+        return
+    }
+
+    $wslIp = Get-WslIpv4Address -Distro $Distro
+    if ([string]::IsNullOrWhiteSpace($wslIp)) {
+        Write-Warning "Skipping LAN port forwarding setup because the WSL IP address could not be determined."
+        return
+    }
+
+    $portMap = @(
+        @{ Name = 'WSLServarrUI'; Port = 5055 }
+    )
+
+    if ($cfg.sabnzbd -and $cfg.sabnzbd.enabled) { $portMap += @{ Name = 'SABnzbd'; Port = [int]$cfg.sabnzbd.port } }
+    if ($cfg.prowlarr -and $cfg.prowlarr.enabled) { $portMap += @{ Name = 'Prowlarr'; Port = [int]$cfg.prowlarr.port } }
+    if ($cfg.sonarr -and $cfg.sonarr.enabled) { $portMap += @{ Name = 'Sonarr'; Port = [int]$cfg.sonarr.port } }
+    if ($cfg.radarr -and $cfg.radarr.enabled) { $portMap += @{ Name = 'Radarr'; Port = [int]$cfg.radarr.port } }
+    if ($cfg.jellyfin -and $cfg.jellyfin.enabled) { $portMap += @{ Name = 'Jellyfin'; Port = [int]$cfg.jellyfin.port } }
+
+    foreach ($entry in $portMap) {
+        $port = [int]$entry.Port
+        if ($port -le 0) { continue }
+
+        $ruleName = "WSLServarr $($entry.Name) TCP $port"
+        $existingRule = Get-NetFirewallRule -DisplayName $ruleName -ErrorAction SilentlyContinue
+        if (-not $existingRule) {
+            try {
+                New-NetFirewallRule -DisplayName $ruleName -Direction Inbound -Action Allow -Protocol TCP -LocalPort $port -Profile Any | Out-Null
+            } catch {
+                Write-Warning "Could not create firewall rule for port ${port}: $($_.Exception.Message)"
+            }
+        }
+
+        try {
+            & netsh interface portproxy delete v4tov4 listenaddress=0.0.0.0 listenport=$port | Out-Null
+        } catch {
+            # Ignore missing rules
+        }
+
+        try {
+            & netsh interface portproxy add v4tov4 listenaddress=0.0.0.0 listenport=$port connectaddress=$wslIp connectport=$port | Out-Null
+            Write-Host "[LAN] Forwarding 0.0.0.0:${port} -> ${wslIp}:${port}" -ForegroundColor DarkGray
+        } catch {
+            Write-Warning "Could not create port proxy for port ${port}: $($_.Exception.Message)"
+        }
+    }
+}
+
 function Start-RunMode {
     param(
         [Parameter(Mandatory = $true)]
@@ -123,6 +248,8 @@ docker compose up -d wslservarr_ui
 '@
     Invoke-Wsl -Distro $Distro -Script $runScript
 
+    Sync-HostPortAccess -Distro $Distro
+
     Write-Host "[Run] Starting keepalive session to prevent WSL from idling out..."
     $keepAliveArgs = ('-d {0} -u root -- bash -lc ''exec tail -f /dev/null''' -f $Distro)
     $keepAliveProcess = Start-Process -FilePath 'wsl.exe' -ArgumentList $keepAliveArgs -WindowStyle Hidden -PassThru
@@ -149,6 +276,15 @@ docker compose up -d wslservarr_ui
                 Write-Host "[$ts] wslservarr_ui not running | http://localhost:5055" -ForegroundColor Yellow
             } else {
                 Write-Host "[$ts] $status | http://localhost:5055" -ForegroundColor DarkGray
+            }
+
+            if ((Get-Date) - $script:lastLanPortSync -gt [TimeSpan]::FromMinutes(10)) {
+                try {
+                    Sync-HostPortAccess -Distro $Distro
+                    $script:lastLanPortSync = Get-Date
+                } catch {
+                    Write-Warning "LAN port sync failed: $($_.Exception.Message)"
+                }
             }
             Start-Sleep -Seconds 30
         }
@@ -192,6 +328,8 @@ fi
 docker ps --format 'table {{.Names}}\t{{.Status}}'
 '@
         Invoke-Wsl -Distro $Distro -Script $restartScript
+
+        Sync-HostPortAccess -Distro $Distro
 
         Write-Host ""
         Write-Host "Restart complete." -ForegroundColor Green
@@ -250,6 +388,13 @@ if ([string]::IsNullOrWhiteSpace($Action)) {
         }
     }
     Write-Host ""
+}
+
+$script:lastLanPortSync = Get-Date
+
+$actionsRequiringAdmin = @('Run', 'Setup', 'Update', 'RestartAll')
+if ($actionsRequiringAdmin -contains $Action -and -not (Test-RunningAsAdministrator)) {
+    throw "Action '$Action' requires Administrator privileges for LAN access (portproxy + firewall). Re-run PowerShell as Administrator and run .\\wslservarr.ps1 again."
 }
 
 if ($Action -eq "Reinstall") {
@@ -588,6 +733,8 @@ systemctl set-default multi-user.target
     $containerCheck = wsl -d $DistroName -- bash -lc "docker ps --format 'table {{.Names}}\t{{.Status}}'" 2>&1
     Write-Host "Container Status:"
     Write-Host $containerCheck
+
+    Sync-HostPortAccess -Distro $DistroName
     Write-Host ""
     Write-Host "Windows Folders:"
     Write-Host "  Root:      $dataRootPath"
@@ -681,6 +828,8 @@ fi
 
     Write-Host "[3/4] Building and starting custom UI..."
     & wsl -d $DistroName -- bash -lc "cd /opt/wslservarr && docker compose up -d --build wslservarr_ui"
+
+    Sync-HostPortAccess -Distro $DistroName
 
     Write-Host "[4/4] Done." -ForegroundColor Green
     Write-Host "UI updated: http://localhost:5055"

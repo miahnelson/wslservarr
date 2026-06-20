@@ -817,9 +817,20 @@ function normalizeConfig(config) {
   next.setup.completedAt = next.setup.completedAt || null;
   next.composeYaml = typeof next.composeYaml === 'string' ? next.composeYaml : '';
   for (const appName of TARGET_CONTAINERS) {
-    if (!next[appName].composeYaml.trim() || !hasServiceYamlBody(appName, next[appName].composeYaml)) {
-      next[appName].composeYaml = getDefaultServiceYaml(next, appName);
+    let yaml = next[appName].composeYaml || '';
+    // Clean up stored YAML: remove any networks: entries that shouldn't be there
+    if (yaml.trim()) {
+      yaml = yaml.split('\n')
+        .filter((line) => !line.trim().startsWith('networks:'))
+        .filter((line) => !/^-\s*["']?wslservarr["']?\s*$/i.test(line.trim()))
+        .join('\n')
+        .trimEnd();
     }
+    // Regenerate if empty or invalid
+    if (!yaml.trim() || !hasServiceYamlBody(appName, yaml)) {
+      yaml = getDefaultServiceYaml(next, appName);
+    }
+    next[appName].composeYaml = yaml;
   }
   next.composeYaml = buildComposeFromIndependentYaml(next);
   return next;
@@ -932,8 +943,6 @@ function buildAppsCompose(cfg) {
       - ${downloadsRoot}:/downloads
     ports:
       - "0.0.0.0:${cfg.sabnzbd.port}:8080"
-    networks:
-      - ${SHARED_DOCKER_NETWORK}
     restart: unless-stopped
 
 `;
@@ -953,8 +962,6 @@ function buildAppsCompose(cfg) {
       - ${downloadsRoot}:/downloads
     ports:
       - "0.0.0.0:${cfg.sonarr.port}:8989"
-    networks:
-      - ${SHARED_DOCKER_NETWORK}
     restart: unless-stopped
 
 `;
@@ -974,8 +981,6 @@ function buildAppsCompose(cfg) {
       - ${downloadsRoot}:/downloads
     ports:
       - "0.0.0.0:${cfg.radarr.port}:7878"
-    networks:
-      - ${SHARED_DOCKER_NETWORK}
     restart: unless-stopped
 
 `;
@@ -993,8 +998,6 @@ function buildAppsCompose(cfg) {
       - /mnt/config/prowlarr:/config
     ports:
       - "0.0.0.0:${cfg.prowlarr.port}:9696"
-    networks:
-      - ${SHARED_DOCKER_NETWORK}
     restart: unless-stopped
 
 `;
@@ -1013,8 +1016,6 @@ function buildAppsCompose(cfg) {
       - ${mediaRoot}:/media
     ports:
       - "0.0.0.0:${cfg.jellyfin.port}:8096"
-    networks:
-      - ${SHARED_DOCKER_NETWORK}
     restart: unless-stopped
 
 `;
@@ -1031,9 +1032,16 @@ function extractServiceYaml(composeYaml, appName) {
 
   let end = lines.length;
   for (let i = start + 1; i < lines.length; i++) {
-    if (/^  [A-Za-z0-9_-]+:\s*$/.test(lines[i])) {
-      end = i;
-      break;
+    const line = lines[i];
+    // Stop when we hit:
+    // 1. Another service (2+ spaces + key:) 
+    // 2. A top-level key (0 spaces + key:)
+    // But NOT a blank line (even with whitespace)
+    if (line.trim()) {  // Non-empty line
+      if (/^  [A-Za-z0-9_-]+:\s*$/.test(line) || /^[A-Za-z0-9_-]+:\s*$/.test(line)) {
+        end = i;
+        break;
+      }
     }
   }
 
@@ -1047,8 +1055,36 @@ function normalizeServiceYamlBlock(appName, serviceYaml) {
     raw = extracted;
   }
 
-  return raw
-    .split('\n')
+  const strippedLines = [];
+  const lines = raw.split('\n');
+  let skipSectionIndent = -1;
+  for (const line of lines) {
+    const trimmed = line.trim();
+    const indent = (line.match(/^\s*/)?.[0]?.length) || 0;
+
+    if (skipSectionIndent >= 0) {
+      if (!trimmed) {
+        continue;
+      }
+      if (indent > skipSectionIndent) {
+        continue;
+      }
+      skipSectionIndent = -1;
+    }
+
+    if (/^networks:\s*$/i.test(trimmed)) {
+      skipSectionIndent = indent;
+      continue;
+    }
+
+    if (/^-\s*["']?wslservarr["']?\s*$/i.test(trimmed)) {
+      continue;
+    }
+
+    strippedLines.push(line);
+  }
+
+  return strippedLines
     .map((line, idx) => {
       if (idx === 0) {
         if (line.trim() === `${appName}:`) return `  ${appName}:`;
@@ -1059,6 +1095,7 @@ function normalizeServiceYamlBlock(appName, serviceYaml) {
       return line.startsWith('  ') ? line : `    ${line.trimStart()}`;
     })
     .join('\n')
+    .replace(/\n\s*\n+/g, '\n') // Remove multiple consecutive empty lines
     .trimEnd();
 }
 
@@ -1092,8 +1129,9 @@ function getAppServiceYaml(cfg, appName) {
 function buildComposeFromIndependentYaml(cfg, appNames = TARGET_CONTAINERS.filter((name) => cfg[name]?.enabled)) {
   const blocks = appNames
     .filter((name) => TARGET_CONTAINERS.includes(name))
-    .map((name) => getAppServiceYaml(cfg, name))
-    .filter(Boolean);
+    .map((name) => ({ name, block: getAppServiceYaml(cfg, name) }))
+    .filter((entry) => Boolean(entry.block))
+    .map((entry) => normalizeServiceYamlBlock(entry.name, entry.block));
 
   if (!blocks.length) {
     return `services:\n\nnetworks:\n  ${SHARED_DOCKER_NETWORK}:\n    external: true\n    name: ${SHARED_DOCKER_NETWORK}\n`;

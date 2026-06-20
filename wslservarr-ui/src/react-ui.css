@@ -33,6 +33,19 @@ body {
 	margin-bottom: 16px;
 }
 
+.app-brand {
+	display: flex;
+	align-items: center;
+	gap: 10px;
+}
+
+.app-logo {
+	width: 34px;
+	height: 34px;
+	object-fit: contain;
+	border-radius: 6px;
+}
+
 h1 { margin: 0; font-size: 1.6rem; }
 h2 { margin: 0 0 12px; font-size: 1.15rem; }
 h3 { margin: 0 0 10px; font-size: 1rem; color: var(--text-dim); }
