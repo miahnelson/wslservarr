@@ -1,11 +1,11 @@
 import React, { useEffect, useMemo, useState } from 'react';
 
 const defaultConfig = {
-  sonarr: { enabled: false, url: 'http://sonarr:8989', apiKey: '', port: '8989', tvRoot: '/media/tv' },
-  radarr: { enabled: false, url: 'http://radarr:7878', apiKey: '', port: '7878', movieRoot: '/media/movies' },
-  sabnzbd: { enabled: false, url: 'http://sabnzbd:8080', apiKey: '', port: '8080', tvCategory: 'tv', movieCategory: 'movies' },
-  prowlarr: { enabled: false, url: 'http://prowlarr:9696', apiKey: '', port: '9696' },
-  jellyfin: { enabled: false, url: 'http://jellyfin:8096', apiKey: '', port: '8096' },
+  sonarr: { enabled: false, url: 'http://sonarr:8989', apiKey: '', port: '8989', tvRoot: '/media/tv', composeYaml: '' },
+  radarr: { enabled: false, url: 'http://radarr:7878', apiKey: '', port: '7878', movieRoot: '/media/movies', composeYaml: '' },
+  sabnzbd: { enabled: false, url: 'http://sabnzbd:8080', apiKey: '', port: '8080', tvCategory: 'tv', movieCategory: 'movies', composeYaml: '' },
+  prowlarr: { enabled: false, url: 'http://prowlarr:9696', apiKey: '', port: '9696', composeYaml: '' },
+  jellyfin: { enabled: false, url: 'http://jellyfin:8096', apiKey: '', port: '8096', composeYaml: '' },
   newshosting: { enabled: false, name: 'newshosting', host: 'news.newshosting.com', port: 563, username: '', password: '', ssl: true, connections: 40, retention: 0, optional: false },
   paths: { mediaRoot: '/mnt/media', downloadsRoot: '/mnt/downloads', configRoot: '/mnt/config' },
   runtime: { timezone: 'America/New_York', puid: '1000', pgid: '1000' },
@@ -36,6 +36,7 @@ function App() {
   const [error, setError] = useState('');
   const [saving, setSaving] = useState(false);
   const [showApiKeys, setShowApiKeys] = useState({ sonarr: false, radarr: false, sabnzbd: false, prowlarr: false, jellyfin: false });
+  const [configModal, setConfigModal] = useState(null);
 
   const runningCount = useMemo(() => containers.filter((c) => c.status === 'running').length, [containers]);
 
@@ -128,6 +129,11 @@ function App() {
       timezone: config.runtime.timezone,
       puid: config.runtime.puid,
       pgid: config.runtime.pgid,
+      sonarrComposeYaml: config.sonarr.composeYaml || '',
+      radarrComposeYaml: config.radarr.composeYaml || '',
+      sabnzbdComposeYaml: config.sabnzbd.composeYaml || '',
+      prowlarrComposeYaml: config.prowlarr.composeYaml || '',
+      jellyfinComposeYaml: config.jellyfin.composeYaml || '',
       composeYaml: config.composeYaml
     };
 

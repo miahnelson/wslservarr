@@ -637,14 +637,16 @@ function buildConfigFromBody(body) {
       url: body.sonarrUrl || prev.sonarr.url || 'http://sonarr:8989',
       apiKey: body.sonarrApiKey || '',
       port: body.sonarrPort || '8989',
-      tvRoot: body.tvRoot || '/media/tv'
+      tvRoot: body.tvRoot || '/media/tv',
+      composeYaml: typeof body.sonarrComposeYaml === 'string' ? body.sonarrComposeYaml : (prev.sonarr.composeYaml || '')
     },
     radarr: {
       enabled: body.radarrEnabled === 'on' || body.radarrEnabled === true,
       url: body.radarrUrl || prev.radarr.url || 'http://radarr:7878',
       apiKey: body.radarrApiKey || '',
       port: body.radarrPort || '7878',
-      movieRoot: body.movieRoot || '/media/movies'
+      movieRoot: body.movieRoot || '/media/movies',
+      composeYaml: typeof body.radarrComposeYaml === 'string' ? body.radarrComposeYaml : (prev.radarr.composeYaml || '')
     },
     sabnzbd: {
       enabled: body.sabnzbdEnabled === 'on' || body.sabnzbdEnabled === true,
@@ -652,19 +654,22 @@ function buildConfigFromBody(body) {
       apiKey: body.sabApiKey || '',
       port: body.sabPort || '8080',
       tvCategory: body.tvCategory || 'tv',
-      movieCategory: body.movieCategory || 'movies'
+      movieCategory: body.movieCategory || 'movies',
+      composeYaml: typeof body.sabnzbdComposeYaml === 'string' ? body.sabnzbdComposeYaml : (prev.sabnzbd.composeYaml || '')
     },
     prowlarr: {
       enabled: body.prowlarrEnabled === 'on' || body.prowlarrEnabled === true,
       url: body.prowlarrUrl || prev.prowlarr.url || 'http://prowlarr:9696',
       apiKey: body.prowlarrApiKey || '',
-      port: body.prowlarrPort || '9696'
+      port: body.prowlarrPort || '9696',
+      composeYaml: typeof body.prowlarrComposeYaml === 'string' ? body.prowlarrComposeYaml : (prev.prowlarr.composeYaml || '')
     },
     jellyfin: {
       enabled: body.jellyfinEnabled === 'on' || body.jellyfinEnabled === true,
       url: body.jellyfinUrl || prev.jellyfin.url || 'http://jellyfin:8096',
       apiKey: body.jellyfinApiKey || '',
-      port: body.jellyfinPort || '8096'
+      port: body.jellyfinPort || '8096',
+      composeYaml: typeof body.jellyfinComposeYaml === 'string' ? body.jellyfinComposeYaml : (prev.jellyfin.composeYaml || '')
     },
     newshosting: {
       enabled: body.newshostingEnabled === 'on' || body.newshostingEnabled === true,

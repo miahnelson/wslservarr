@@ -213,3 +213,60 @@ details[open] > div {
 details > div {
 	display: none;
 }
+
+.modal-backdrop {
+	position: fixed;
+	inset: 0;
+	background: rgba(0, 0, 0, 0.65);
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	z-index: 100;
+}
+
+.modal {
+	background: var(--bg-card);
+	border: 1px solid var(--border);
+	border-radius: 12px;
+	width: 560px;
+	max-width: 95vw;
+	max-height: 85vh;
+	display: flex;
+	flex-direction: column;
+	overflow: hidden;
+}
+
+.modal-header {
+	display: flex;
+	justify-content: space-between;
+	align-items: center;
+	padding: 14px 18px;
+	border-bottom: 1px solid var(--border);
+}
+
+.modal-header h3 {
+	margin: 0;
+	color: var(--text);
+	font-size: 1rem;
+	font-weight: 600;
+}
+
+.modal-close {
+	padding: 4px 10px;
+	font-size: 1rem;
+	line-height: 1;
+}
+
+.modal-body {
+	padding: 18px;
+	overflow-y: auto;
+	flex: 1;
+}
+
+.modal-footer {
+	padding: 12px 18px;
+	border-top: 1px solid var(--border);
+	display: flex;
+	gap: 8px;
+	justify-content: flex-end;
+}
