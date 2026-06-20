@@ -197,6 +197,17 @@ function discoverApiKeysFromMountedConfig() {
   return found;
 }
 
+function mergeDiscoveredApiKeys(cfg, found = discoverApiKeysFromMountedConfig()) {
+  const next = normalizeConfig(cfg);
+
+  if (found.sonarr && !next.sonarr.apiKey) next.sonarr.apiKey = found.sonarr;
+  if (found.radarr && !next.radarr.apiKey) next.radarr.apiKey = found.radarr;
+  if (found.sabnzbd && !next.sabnzbd.apiKey) next.sabnzbd.apiKey = found.sabnzbd;
+  if (found.prowlarr && !next.prowlarr.apiKey) next.prowlarr.apiKey = found.prowlarr;
+
+  return next;
+}
+
 async function execForDiagnostics(command, args) {
   try {
     const { stdout, stderr } = await execFileAsync(command, args, { maxBuffer: 1024 * 1024 * 10 });
@@ -661,6 +672,9 @@ async function applyIntegrationsWithProgress(cfg, appName = null, onProgress) {
     if (cfg.prowlarr?.enabled && cfg.prowlarr?.apiKey) {
       if (onProgress) onProgress(`Applying Prowlarr application for ${app}...`);
       await retryAsync(() => upsertProwlarrApplication(app, cfg), 8, 2500);
+
+      if (onProgress) onProgress(`Applying Prowlarr indexer in ${app}...`);
+      await retryAsync(() => upsertArrProwlarrIndexer(app, cfg), 8, 2500);
     } else if (onProgress) {
       onProgress(`Skipping ${app} Prowlarr application setup (Prowlarr disabled or API key missing).`);
     }
@@ -863,7 +877,7 @@ function buildConfigFromBody(body) {
 }
 
 async function getDashboardData() {
-  const config = normalizeConfig(readConfig());
+  const config = mergeDiscoveredApiKeys(readConfig());
   let containers = [];
   try {
     containers = await getContainerStatuses();
@@ -1277,13 +1291,9 @@ app.post('/api/config', (req, res) => {
 
 app.post('/api/discover-keys', (req, res) => {
   try {
-    const cfg = normalizeConfig(readConfig());
     const found = discoverApiKeysFromMountedConfig();
 
-    if (found.sonarr) cfg.sonarr.apiKey = found.sonarr;
-    if (found.radarr) cfg.radarr.apiKey = found.radarr;
-    if (found.sabnzbd) cfg.sabnzbd.apiKey = found.sabnzbd;
-    if (found.prowlarr) cfg.prowlarr.apiKey = found.prowlarr;
+    const cfg = mergeDiscoveredApiKeys(readConfig(), found);
 
     writeConfig(cfg);
 
@@ -1377,12 +1387,14 @@ app.post('/api/apply', async (req, res) => {
     if (canSonarr) {
       await ensureRootFolder('sonarr', cfg);
       if (canProwlarr) await upsertProwlarrApplication('sonarr', cfg);
+      if (canProwlarr) await upsertArrProwlarrIndexer('sonarr', cfg);
       if (canSab) await upsertArrDownloadClient('sonarr', cfg);
     }
 
     if (canRadarr) {
       await ensureRootFolder('radarr', cfg);
       if (canProwlarr) await upsertProwlarrApplication('radarr', cfg);
+      if (canProwlarr) await upsertArrProwlarrIndexer('radarr', cfg);
       if (canSab) await upsertArrDownloadClient('radarr', cfg);
     }
 
