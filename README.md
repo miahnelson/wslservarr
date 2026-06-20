@@ -36,8 +36,14 @@ Web UI source repo (default):
 # Run app (keep UI running)
 .\wslservarr.ps1 -Action Run
 
-# Update UI only
+# Restart all services in the stack
+.\wslservarr.ps1 -Action RestartAll
+
+# Update UI only (production: pulls from GitHub)
 .\wslservarr.ps1 -Action Update
+
+# Update UI only (development: sync local working copy)
+.\wslservarr.ps1 -Action Update -DevMode
 
 # Use custom repo/branch for UI source
 .\wslservarr.ps1 -Action Update -WebUiRepoUrl https://github.com/miahnelson/wslservarr.git -WebUiRepoBranch main
@@ -49,7 +55,9 @@ Web UI source repo (default):
 .\wslservarr.ps1 -Action Uninstall
 ```
 
-After **Setup** and **Update**, the script enters run mode and keeps printing UI status + URL until you press `Ctrl+C`.
+After **Setup**, the script enters run mode and keeps printing UI status + URL until you press `Ctrl+C`.
+
+`Update` finishes after rebuild/deploy and returns to the prompt.
 
 ## Folders
 

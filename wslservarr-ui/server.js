@@ -13,6 +13,7 @@ const SPA_DIST_PATH = path.join(__dirname, 'dist');
 const PORT = process.env.PORT || 5055;
 const CONFIG_PATH = process.env.CONFIG_PATH || '/data/config.json';
 const DIAGNOSTICS_DIR = process.env.DIAGNOSTICS_DIR || '/data/diagnostics';
+const API_TOKEN = (process.env.WSLSERVARR_API_TOKEN || '').trim();
 const TARGET_CONTAINERS = ['sonarr', 'radarr', 'sabnzbd', 'prowlarr', 'jellyfin'];
 const APPS_COMPOSE_PATH = '/opt/wslservarr/compose.apps.yml';
 const execFileAsync = promisify(execFile);
@@ -33,10 +34,42 @@ app.use(express.json());
 app.use('/api', (req, res, next) => {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET,POST,PUT,OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Api-Token');
   if (req.method === 'OPTIONS') return res.sendStatus(204);
   next();
 });
+
+function getRequestToken(req) {
+  const auth = String(req.headers.authorization || '');
+  if (auth.toLowerCase().startsWith('bearer ')) {
+    return auth.slice(7).trim();
+  }
+
+  const xApiToken = req.headers['x-api-token'];
+  if (typeof xApiToken === 'string' && xApiToken.trim()) {
+    return xApiToken.trim();
+  }
+  if (Array.isArray(xApiToken) && xApiToken.length) {
+    return String(xApiToken[0] || '').trim();
+  }
+
+  if (typeof req.query?.token === 'string' && req.query.token.trim()) {
+    return req.query.token.trim();
+  }
+
+  return '';
+}
+
+function requireApiToken(req, res, next) {
+  if (!API_TOKEN) return next();
+  if (getRequestToken(req) !== API_TOKEN) {
+    return res.status(401).json({ ok: false, error: 'Unauthorized' });
+  }
+  return next();
+}
+
+app.use('/api', requireApiToken);
+app.use('/container', requireApiToken);
 
 function withTimeout(promise, ms, label) {
   let timer;

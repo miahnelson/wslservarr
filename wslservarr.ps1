@@ -1,6 +1,6 @@
 ﻿[CmdletBinding(SupportsShouldProcess = $true)]
 param(
-    [ValidateSet("Run", "Setup", "Uninstall", "Update", "Reinstall")]
+    [ValidateSet("Run", "Setup", "Uninstall", "Update", "Reinstall", "RestartAll")]
     [string]$Action,
 
     # Setup parameters
@@ -159,6 +159,44 @@ docker compose up -d wslservarr_ui
     }
 }
 
+function Restart-AllServices {
+        param(
+                [Parameter(Mandatory = $true)]
+                [string]$Distro
+        )
+
+        $existing = wsl -l -q
+        if ($existing -notcontains $Distro) {
+                throw "Distro '$Distro' not found. Run with -Action Setup first."
+        }
+
+        Write-Host "[RestartAll] Ensuring Docker service is running..."
+        & wsl -d $Distro -u root -- systemctl start docker
+
+        Write-Host "[RestartAll] Restarting UI and app services..."
+        $restartScript = @'
+set -euo pipefail
+
+if [ -f /opt/wslservarr/compose.yml ]; then
+    docker compose -f /opt/wslservarr/compose.yml up -d wslservarr_ui
+fi
+
+if [ -f /opt/wslservarr/compose.apps.yml ]; then
+    services=$(docker compose -f /opt/wslservarr/compose.apps.yml config --services || true)
+    if [ -n "$services" ]; then
+        docker compose -f /opt/wslservarr/compose.apps.yml up -d $services
+    fi
+fi
+
+docker ps --format 'table {{.Names}}\t{{.Status}}'
+'@
+        Invoke-Wsl -Distro $Distro -Script $restartScript
+
+        Write-Host ""
+        Write-Host "Restart complete." -ForegroundColor Green
+        Write-Host "WSLServarr UI: http://localhost:5055" -ForegroundColor Green
+}
+
 # ============================================================================
 # Action Selection
 # ============================================================================
@@ -171,18 +209,19 @@ if ([string]::IsNullOrWhiteSpace($Action)) {
     Write-Host "  1) Run app   - Start/keep UI running (default in 5s)"
     Write-Host "  2) Setup     - Install WSLServarr from scratch"
     Write-Host "  3) Update    - Redeploy UI to existing installation"
-    Write-Host "  4) Uninstall - Remove WSLServarr"
-    Write-Host "  5) Reinstall - Recreate distro and reinstall stack"
+    Write-Host "  4) RestartAll - Restart all stack services"
+    Write-Host "  5) Uninstall - Remove WSLServarr"
+    Write-Host "  6) Reinstall - Recreate distro and reinstall stack"
     Write-Host ""
 
     $choice = $null
-    Write-Host "Defaulting to 'Run app' in 5 seconds... Press 1-5 to choose another option." -ForegroundColor Yellow
+    Write-Host "Defaulting to 'Run app' in 5 seconds... Press 1-6 to choose another option." -ForegroundColor Yellow
     try {
         $deadline = (Get-Date).AddSeconds(5)
         while ((Get-Date) -lt $deadline) {
             if ([Console]::KeyAvailable) {
                 $key = [Console]::ReadKey($true)
-                if ($key.KeyChar -match '^[1-5]$') {
+                if ($key.KeyChar -match '^[1-6]$') {
                     $choice = [string]$key.KeyChar
                     break
                 }
@@ -201,8 +240,9 @@ if ([string]::IsNullOrWhiteSpace($Action)) {
         "1" { $Action = "Run" }
         "2" { $Action = "Setup" }
         "3" { $Action = "Update" }
-        "4" { $Action = "Uninstall" }
-        "5" { $Action = "Reinstall" }
+        "4" { $Action = "RestartAll" }
+        "5" { $Action = "Uninstall" }
+        "6" { $Action = "Reinstall" }
         default {
             Write-Host "Invalid choice. Exiting." -ForegroundColor Red
             exit 1
@@ -219,6 +259,11 @@ if ($Action -eq "Reinstall") {
 
 if ($Action -eq "Run") {
     Start-RunMode -Distro $DistroName
+    exit 0
+}
+
+if ($Action -eq "RestartAll") {
+    Restart-AllServices -Distro $DistroName
     exit 0
 }
 
@@ -597,37 +642,32 @@ fi
     }
 
     Write-Host "[2/4] Ensuring compose service exists..."
-    # Build bash script by constructing it line by line to avoid PowerShell parsing
-    $lt = '<'  # Less than character to avoid operator parsing
-    $gt = '>'  # Greater than character
-    $bashScriptLines = @(
-        'set -euo pipefail',
-        'mkdir -p /mnt/config/wslservarr-ui',
-        'if ! grep -q "wslservarr_ui:" /opt/wslservarr/compose.yml; then',
-        "cat >>/opt/wslservarr/compose.yml $lt$lt"+'BASHEOF',
-        '',
-        '  wslservarr_ui:',
-        '    build: ./src/wslservarr-ui',
-        '    container_name: wslservarr_ui',
-        '    environment:',
-        '      - PORT=5055',
-        '      - CONFIG_PATH=/data/config.json',
-        '    volumes:',
-        '      - /var/run/docker.sock:/var/run/docker.sock',
-        '      - /mnt/config/wslservarr-ui:/data',
-        '      - /opt/wslservarr:/opt/wslservarr',
-        '      - /mnt/config:/mnt/config',
-        '      - /mnt/media:/mnt/media',
-        '      - /mnt/downloads:/mnt/downloads',
-        '    ports:',
-        '      - "5055:5055"',
-        '    restart: unless-stopped',
-        'BASHEOF',
-        'fi'
-    )
-    $bashScript = $bashScriptLines -join [System.Environment]::NewLine
-    $encoded = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($bashScript))
-    & wsl -d $DistroName -u root -- bash -c "echo $encoded | base64 -d | bash"
+        $ensureComposeScript = @'
+set -euo pipefail
+mkdir -p /mnt/config/wslservarr-ui
+if ! grep -q "wslservarr_ui:" /opt/wslservarr/compose.yml; then
+cat >>/opt/wslservarr/compose.yml <<'BASHEOF'
+
+    wslservarr_ui:
+        build: ./src/wslservarr-ui
+        container_name: wslservarr_ui
+        environment:
+            - PORT=5055
+            - CONFIG_PATH=/data/config.json
+        volumes:
+            - /var/run/docker.sock:/var/run/docker.sock
+            - /mnt/config/wslservarr-ui:/data
+            - /opt/wslservarr:/opt/wslservarr
+            - /mnt/config:/mnt/config
+            - /mnt/media:/mnt/media
+            - /mnt/downloads:/mnt/downloads
+        ports:
+            - "5055:5055"
+        restart: unless-stopped
+BASHEOF
+fi
+'@
+        Invoke-Wsl -Distro $DistroName -Script $ensureComposeScript
 
     $dockerConfigRepair = @(
         'set -euo pipefail',
