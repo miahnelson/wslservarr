@@ -666,7 +666,7 @@ function normalizeConfig(config) {
   next.setup.completedAt = next.setup.completedAt || null;
   next.composeYaml = typeof next.composeYaml === 'string' ? next.composeYaml : '';
   for (const appName of TARGET_CONTAINERS) {
-    if (!next[appName].composeYaml.trim()) {
+    if (!next[appName].composeYaml.trim() || !hasServiceYamlBody(appName, next[appName].composeYaml)) {
       next[appName].composeYaml = getDefaultServiceYaml(next, appName);
     }
   }
@@ -879,7 +879,13 @@ function extractServiceYaml(composeYaml, appName) {
 }
 
 function normalizeServiceYamlBlock(appName, serviceYaml) {
-  return String(serviceYaml || '')
+  let raw = String(serviceYaml || '').trimEnd();
+  const extracted = extractServiceYaml(raw, appName);
+  if (extracted) {
+    raw = extracted;
+  }
+
+  return raw
     .split('\n')
     .map((line, idx) => {
       if (idx === 0) {
@@ -894,13 +900,28 @@ function normalizeServiceYamlBlock(appName, serviceYaml) {
     .trimEnd();
 }
 
+function hasServiceYamlBody(appName, serviceYaml) {
+  const normalized = normalizeServiceYamlBlock(appName, serviceYaml);
+  const lines = normalized.split('\n');
+  return lines.slice(1).some((line) => /^\s{4}\S/.test(line));
+}
+
 function getDefaultServiceYaml(cfg, appName) {
-  return normalizeServiceYamlBlock(appName, extractServiceYaml(buildAppsCompose(cfg), appName));
+  const cfgWithAppEnabled = {
+    ...cfg,
+    [appName]: {
+      ...(cfg?.[appName] || {}),
+      enabled: true
+    }
+  };
+
+  const extracted = extractServiceYaml(buildAppsCompose(cfgWithAppEnabled), appName);
+  return normalizeServiceYamlBlock(appName, extracted);
 }
 
 function getAppServiceYaml(cfg, appName) {
   const raw = String(cfg?.[appName]?.composeYaml || '').trim();
-  if (raw) {
+  if (raw && hasServiceYamlBody(appName, raw)) {
     return normalizeServiceYamlBlock(appName, raw);
   }
   return getDefaultServiceYaml(cfg, appName);
