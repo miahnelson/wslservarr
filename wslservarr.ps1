@@ -176,6 +176,7 @@ function Restart-AllServices {
         Write-Host "[RestartAll] Restarting UI and app services..."
         $restartScript = @'
 set -euo pipefail
+        export COMPOSE_IGNORE_ORPHANS=1
 
 if [ -f /opt/wslservarr/compose.yml ]; then
     docker compose -f /opt/wslservarr/compose.yml up -d wslservarr_ui

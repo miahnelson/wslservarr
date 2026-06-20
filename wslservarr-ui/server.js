@@ -14,7 +14,7 @@ const PORT = process.env.PORT || 5055;
 const CONFIG_PATH = process.env.CONFIG_PATH || '/data/config.json';
 const DIAGNOSTICS_DIR = process.env.DIAGNOSTICS_DIR || '/data/diagnostics';
 const API_TOKEN = (process.env.WSLSERVARR_API_TOKEN || '').trim();
-const TARGET_CONTAINERS = ['sonarr', 'radarr', 'sabnzbd', 'prowlarr', 'jellyfin'];
+const TARGET_CONTAINERS = ['sabnzbd', 'prowlarr', 'sonarr', 'radarr', 'jellyfin'];
 const APPS_COMPOSE_PATH = '/opt/wslservarr/compose.apps.yml';
 const execFileAsync = promisify(execFile);
 const deployClients = new Set();
@@ -118,7 +118,13 @@ async function retryAsync(fn, attempts = 6, delayMs = 2500) {
 
 function runCommandWithProgress(command, args, label, onProgress) {
   return new Promise((resolve, reject) => {
-    const child = spawn(command, args, { stdio: ['ignore', 'pipe', 'pipe'] });
+    const child = spawn(command, args, {
+      stdio: ['ignore', 'pipe', 'pipe'],
+      env: {
+        ...process.env,
+        COMPOSE_IGNORE_ORPHANS: 'true'
+      }
+    });
     const prefix = label ? `[${label}] ` : '';
     const log = (line) => {
       if (onProgress) onProgress(`${prefix}${line}`);
@@ -1055,6 +1061,15 @@ app.get('/api/bootstrap', async (req, res) => {
   });
 });
 
+app.get('/api/containers', async (req, res) => {
+  try {
+    const containers = await getContainerStatuses();
+    return res.json({ ok: true, containers });
+  } catch (e) {
+    return res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
 app.post('/api/config', (req, res) => {
   try {
     const next = buildConfigFromBody(req.body || {});
@@ -1279,7 +1294,12 @@ app.post('/container/:name/:action', async (req, res) => {
         args.push('--force-recreate');
       }
       args.push(name);
-      await execFileAsync('docker', args);
+      await execFileAsync('docker', args, {
+        env: {
+          ...process.env,
+          COMPOSE_IGNORE_ORPHANS: 'true'
+        }
+      });
     } else if (action === 'stop') {
       const container = docker.getContainer(name);
       await container.stop();

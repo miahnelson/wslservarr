@@ -29,6 +29,7 @@ function mergeConfig(input) {
 }
 
 function App() {
+  const appOrder = ['sabnzbd', 'prowlarr', 'sonarr', 'radarr', 'jellyfin'];
   const [loading, setLoading] = useState(true);
   const [config, setConfig] = useState(defaultConfig);
   const [containers, setContainers] = useState([]);
@@ -47,6 +48,15 @@ function App() {
   const appModalNames = ['sonarr', 'radarr', 'sabnzbd', 'prowlarr', 'jellyfin'];
 
   const runningCount = useMemo(() => containers.filter((c) => c.status === 'running').length, [containers]);
+  const orderedContainers = useMemo(() => {
+    const rank = new Map(appOrder.map((name, index) => [name, index]));
+    return [...containers].sort((a, b) => {
+      const ra = rank.has(a.name) ? rank.get(a.name) : Number.MAX_SAFE_INTEGER;
+      const rb = rank.has(b.name) ? rank.get(b.name) : Number.MAX_SAFE_INTEGER;
+      if (ra !== rb) return ra - rb;
+      return String(a.name).localeCompare(String(b.name));
+    });
+  }, [containers]);
 
   async function loadBootstrap() {
     setLoading(true);
@@ -66,6 +76,43 @@ function App() {
 
   useEffect(() => {
     loadBootstrap();
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    let inFlight = false;
+
+    const pollContainers = async () => {
+      if (cancelled || inFlight) return;
+      if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return;
+      inFlight = true;
+      try {
+        const res = await fetch('/api/containers');
+        const data = await res.json();
+        if (cancelled || !res.ok || !data?.ok) return;
+        if (Array.isArray(data.containers)) {
+          setContainers(data.containers);
+        }
+      } catch {
+        // keep polling quietly; avoid interrupting user editing with transient status errors
+      } finally {
+        inFlight = false;
+      }
+    };
+
+    const onVisible = () => {
+      if (document.visibilityState === 'visible') {
+        pollContainers();
+      }
+    };
+
+    document.addEventListener('visibilitychange', onVisible);
+    const timer = setInterval(pollContainers, 7000);
+    return () => {
+      cancelled = true;
+      clearInterval(timer);
+      document.removeEventListener('visibilitychange', onVisible);
+    };
   }, []);
 
   useEffect(() => {
@@ -443,7 +490,7 @@ function App() {
             <tr><th>Service</th><th>Status</th><th>URL</th><th>Actions</th></tr>
           </thead>
           <tbody>
-            {containers.map((c) => (
+            {orderedContainers.map((c) => (
               <tr key={c.name}>
                 <td>{c.name}</td>
                 <td><span className={statusClass(c.status)}>{c.status}</span></td>
