@@ -374,6 +374,32 @@ function App() {
     setMessage(`${appName} deployment started.`);
   }
 
+  async function restartApp(appName) {
+    setMessage('');
+    setError('');
+    setShowDeployOutput(true);
+    const res = await fetch(`/api/install/apps/${appName}/restart`, { method: 'POST' });
+    const data = await res.json();
+    if (!res.ok || !data.ok) {
+      setError(data.error || `Restart failed for ${appName}`);
+      return;
+    }
+    setMessage(`${appName} restart started.`);
+  }
+
+  async function restartAll() {
+    setMessage('');
+    setError('');
+    setShowDeployOutput(true);
+    const res = await fetch('/api/install/apps/restart', { method: 'POST' });
+    const data = await res.json();
+    if (!res.ok || !data.ok) {
+      setError(data.error || 'Restart all failed');
+      return;
+    }
+    setMessage('Restart all started.');
+  }
+
   function statusClass(status) {
     if (status === 'running') return 'pill running';
     if (status === 'missing') return 'pill missing';
@@ -482,6 +508,7 @@ function App() {
             <button className="secondary" type="button" onClick={() => setConfigModal('newshosting')}>Newshosting</button>
             <button className="secondary" type="button" onClick={discoverApiKeys}>Auto-Fill API Keys</button>
             <button className="secondary" type="button" onClick={applySettings}>Apply to Apps</button>
+            <button className="secondary" type="button" onClick={restartAll}>Restart All</button>
             <button type="button" onClick={saveConfig} disabled={saving}>{saving ? 'Saving...' : 'Save All'}</button>
           </div>
         </div>
@@ -500,7 +527,7 @@ function App() {
                     <button type="button" className="secondary" onClick={() => containerAction(c.name, c.status === 'running' ? 'stop' : 'start')}>
                       {c.status === 'running' ? 'Stop' : 'Start'}
                     </button>
-                    <button type="button" className="secondary" onClick={() => containerAction(c.name, 'restart')}>Restart</button>
+                    <button type="button" className="secondary" onClick={() => restartApp(c.name)}>Restart</button>
                     {c.status === 'missing' ? <button type="button" onClick={() => deployApp(c.name)}>Deploy</button> : null}
                     <button type="button" className="secondary" onClick={() => setConfigModal(c.name)}>Configure</button>
                   </div>
@@ -516,15 +543,15 @@ function App() {
           <div className="modal" onClick={(e) => e.stopPropagation()}>
             <div className="modal-header">
               <div>
-                <h3>Deploy Output</h3>
+                <h3>{deployState.operation === 'restart' ? 'Restart Output' : 'Deploy Output'}</h3>
                 <p className="hint" style={{ marginTop: 6 }}>
                   {deployState.running
-                    ? 'Deployment in progress...'
+                    ? `${deployState.operation === 'restart' ? 'Restart' : 'Deployment'} in progress...`
                     : deployState.success === true
-                      ? 'Last deployment completed successfully.'
+                      ? `Last ${deployState.operation === 'restart' ? 'restart' : 'deployment'} completed successfully.`
                       : deployState.success === false
-                        ? 'Last deployment failed.'
-                        : 'Deployment log.'}
+                        ? `Last ${deployState.operation === 'restart' ? 'restart' : 'deployment'} failed.`
+                        : `${deployState.operation === 'restart' ? 'Restart' : 'Deployment'} log.`}
                 </p>
               </div>
               <button type="button" className="secondary modal-close" onClick={() => setShowDeployOutput(false)}>✕</button>
