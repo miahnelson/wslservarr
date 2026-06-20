@@ -446,13 +446,50 @@ function parseDownloadClientUrl(rawUrl, fallbackPort = 8080) {
   }
 }
 
+function normalizeAppServiceUrl(appName, rawUrl, fallbackPort) {
+  const text = String(rawUrl || '').trim();
+  const safePort = Number(fallbackPort) > 0 ? Number(fallbackPort) : (INTERNAL_SERVICE_PORTS[appName] || 80);
+  if (!text) return `http://${appName}:${safePort}`;
+
+  try {
+    const asUrl = text.includes('://') ? new URL(text) : new URL(`http://${text}`);
+    const isLoopback = ['localhost', '127.0.0.1', '::1'].includes(String(asUrl.hostname || '').toLowerCase());
+    const protocol = asUrl.protocol || 'http:';
+    const host = isLoopback ? appName : asUrl.hostname;
+    const port = Number(asUrl.port || safePort);
+    const normalizedPath = String(asUrl.pathname || '').replace(/\/$/, '');
+    return `${protocol}//${host}:${port}${normalizedPath}`;
+  } catch {
+    return `http://${appName}:${safePort}`;
+  }
+}
+
+const INTERNAL_SERVICE_PORTS = {
+  sabnzbd: 8080,
+  prowlarr: 9696,
+  sonarr: 8989,
+  radarr: 7878,
+  jellyfin: 8096
+};
+
+function getInternalServiceUrl(cfg, appName) {
+  const appCfg = cfg?.[appName] || {};
+  const raw = String(appCfg.url || '').trim().toLowerCase();
+  const protocol = raw.startsWith('https://') ? 'https' : 'http';
+  let port = Number(appCfg.port || INTERNAL_SERVICE_PORTS[appName] || 80);
+  if (!Number.isFinite(port) || port <= 0) {
+    port = INTERNAL_SERVICE_PORTS[appName] || 80;
+  }
+  return `${protocol}://${appName}:${port}`;
+}
+
 async function upsertArrDownloadClient(appName, cfg) {
   const isSonarr = appName === 'sonarr';
   const arr = isSonarr ? cfg.sonarr : cfg.radarr;
   const category = isSonarr ? cfg.sabnzbd.tvCategory : cfg.sabnzbd.movieCategory;
-  const sabConn = parseDownloadClientUrl(cfg.sabnzbd.url, cfg.sabnzbd.port);
+  const sabConn = parseDownloadClientUrl(getInternalServiceUrl(cfg, 'sabnzbd'), cfg.sabnzbd.port);
 
-  const client = apiClient(arr.url, arr.apiKey);
+  const client = apiClient(getInternalServiceUrl(cfg, isSonarr ? 'sonarr' : 'radarr'), arr.apiKey);
   const schemaRes = await client.get('/api/v3/downloadclient/schema');
   const schema = schemaRes.data.find(s => s.implementationName === 'SABnzbd');
   if (!schema) throw new Error(`${appName}: SABnzbd schema not found`);
@@ -498,7 +535,7 @@ async function upsertSabNewshostingServer(cfg) {
   if (!cfg?.newshosting?.enabled) return;
 
   const ns = cfg.newshosting;
-  const sabUrl = String(cfg.sabnzbd.url || '').replace(/\/$/, '');
+  const sabUrl = getInternalServiceUrl(cfg, 'sabnzbd').replace(/\/$/, '');
   if (!sabUrl) throw new Error('SABnzbd URL is missing');
   if (!ns.host || !ns.username || !ns.password) {
     throw new Error('Newshosting requires host, username, and password');
@@ -551,7 +588,7 @@ async function upsertArrProwlarrIndexer(appName, cfg) {
   if (!arr?.enabled || !arr?.apiKey) return;
   if (!cfg?.prowlarr?.enabled || !cfg?.prowlarr?.apiKey) return;
 
-  const client = apiClient(arr.url, arr.apiKey);
+  const client = apiClient(getInternalServiceUrl(cfg, appName === 'sonarr' ? 'sonarr' : 'radarr'), arr.apiKey);
   const schemaRes = await client.get('/api/v3/indexer/schema');
   const schema = (schemaRes.data || []).find(s => String(s.implementationName || '').toLowerCase().includes('prowlarr'));
   if (!schema) throw new Error(`${appName}: Prowlarr indexer schema not found`);
@@ -562,7 +599,7 @@ async function upsertArrProwlarrIndexer(appName, cfg) {
 
   const fields = (schema.fields || []).map(f => {
     const next = { ...f };
-    if (f.name === 'prowlarrUrl' || f.name === 'baseUrl' || f.name === 'url') next.value = cfg.prowlarr.url;
+    if (f.name === 'prowlarrUrl' || f.name === 'baseUrl' || f.name === 'url') next.value = getInternalServiceUrl(cfg, 'prowlarr');
     if (f.name === 'apiKey') next.value = cfg.prowlarr.apiKey;
     return next;
   });
@@ -588,14 +625,14 @@ async function upsertArrProwlarrIndexer(appName, cfg) {
 }
 
 function getProwlarrApplicationProfile(appName, cfg) {
-  const prowlarrUrl = String(cfg?.prowlarr?.url || '').replace(/\/$/, '');
+  const prowlarrUrl = getInternalServiceUrl(cfg, 'prowlarr').replace(/\/$/, '');
   if (!prowlarrUrl) return null;
 
   if (appName === 'sonarr') {
     return {
       name: 'Sonarr',
       prowlarrUrl,
-      baseUrl: String(cfg?.sonarr?.url || '').replace(/\/$/, ''),
+      baseUrl: getInternalServiceUrl(cfg, 'sonarr').replace(/\/$/, ''),
       apiKey: cfg?.sonarr?.apiKey || '',
       syncCategories: [5000, 5010, 5020, 5030, 5040, 5045, 5050, 5090],
       animeSyncCategories: [5070]
@@ -606,7 +643,7 @@ function getProwlarrApplicationProfile(appName, cfg) {
     return {
       name: 'Radarr',
       prowlarrUrl,
-      baseUrl: String(cfg?.radarr?.url || '').replace(/\/$/, ''),
+      baseUrl: getInternalServiceUrl(cfg, 'radarr').replace(/\/$/, ''),
       apiKey: cfg?.radarr?.apiKey || '',
       syncCategories: [2000, 2010, 2020, 2030, 2040, 2045, 2050, 2060, 2070, 2080, 2090]
     };
@@ -640,7 +677,7 @@ async function upsertProwlarrApplication(appName, cfg) {
   if (!profile?.prowlarrUrl || !profile?.baseUrl || !profile?.apiKey) return;
   if (!cfg?.prowlarr?.enabled || !cfg?.prowlarr?.apiKey) return;
 
-  const client = apiClient(cfg.prowlarr.url, cfg.prowlarr.apiKey);
+  const client = apiClient(getInternalServiceUrl(cfg, 'prowlarr'), cfg.prowlarr.apiKey);
   const schemaRes = await client.get('/api/v1/applications/schema');
   const schemaList = Array.isArray(schemaRes.data) ? schemaRes.data : [];
   const schema = schemaList.find(s => String(s.implementationName || '').toLowerCase() === appName);
@@ -731,7 +768,7 @@ async function triggerProwlarrAppIndexerSync(cfg, onProgress, forceSync = true) 
   if (!cfg?.prowlarr?.enabled || !cfg?.prowlarr?.apiKey) return;
 
   if (onProgress) onProgress('Triggering Prowlarr app indexer sync...');
-  const client = apiClient(cfg.prowlarr.url, cfg.prowlarr.apiKey);
+  const client = apiClient(getInternalServiceUrl(cfg, 'prowlarr'), cfg.prowlarr.apiKey);
   const res = await client.post('/api/v1/command', {
     name: 'ApplicationIndexerSync',
     forceSync: !!forceSync
@@ -746,7 +783,7 @@ async function ensureRootFolder(appName, cfg) {
   const arr = appName === 'sonarr' ? cfg.sonarr : cfg.radarr;
   const rootPath = appName === 'sonarr' ? arr.tvRoot : arr.movieRoot;
   
-  const client = apiClient(arr.url, arr.apiKey);
+  const client = apiClient(getInternalServiceUrl(cfg, appName === 'sonarr' ? 'sonarr' : 'radarr'), arr.apiKey);
   const list = await client.get('/api/v3/rootfolder');
   const exists = list.data.some(r => r.path === rootPath || r.path === `${rootPath}/`);
   if (!exists) {
@@ -805,6 +842,13 @@ function normalizeConfig(config) {
     next.radarr.movieRoot = next.radarr.movieRoot.replace('/mnt/media', '/media');
   }
   if (!next.radarr.movieRoot) next.radarr.movieRoot = '/media/movies';
+
+  next.sonarr.url = normalizeAppServiceUrl('sonarr', next.sonarr.url, next.sonarr.port || 8989);
+  next.radarr.url = normalizeAppServiceUrl('radarr', next.radarr.url, next.radarr.port || 7878);
+  next.sabnzbd.url = normalizeAppServiceUrl('sabnzbd', next.sabnzbd.url, next.sabnzbd.port || 8080);
+  next.prowlarr.url = normalizeAppServiceUrl('prowlarr', next.prowlarr.url, next.prowlarr.port || 9696);
+  next.jellyfin.url = normalizeAppServiceUrl('jellyfin', next.jellyfin.url, next.jellyfin.port || 8096);
+
   next.runtime = next.runtime || {};
   next.runtime.timezone = next.runtime.timezone || 'America/New_York';
   next.runtime.puid = String(next.runtime.puid || '1000');
@@ -1200,6 +1244,7 @@ async function installOrUpdateSingleAppWithProgress(config, appName, onProgress)
   if (!cfg[appName]?.enabled) {
     cfg[appName].enabled = true;
     if (onProgress) onProgress(`${appName} was disabled in config, enabling for deployment.`);
+    writeConfig(cfg);
   }
 
   await ensureSharedDockerNetwork();
@@ -1235,6 +1280,7 @@ async function restartAppsWithProgress(config, appName = null, onProgress) {
   if (appName && !cfg[appName]?.enabled) {
     cfg[appName].enabled = true;
     if (onProgress) onProgress(`${appName} was disabled in config, enabling for restart.`);
+    writeConfig(cfg);
   }
 
   await ensureSharedDockerNetwork();
@@ -1594,6 +1640,7 @@ app.post('/container/:name/:action', async (req, res) => {
       const cfg = normalizeConfig(readConfig());
       if (!cfg[name]?.enabled) {
         cfg[name].enabled = true;
+        writeConfig(cfg);
       }
 
       await ensureSharedDockerNetwork();
