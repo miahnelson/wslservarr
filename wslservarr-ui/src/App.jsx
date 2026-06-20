@@ -107,6 +107,13 @@ function App() {
         if (cancelled) return;
         if (!data?.ok) throw new Error(data?.error || 'Failed to load container YAML.');
         setServiceYamlDraft(data.serviceYaml || '');
+        setConfig((prev) => ({
+          ...prev,
+          [configModal]: {
+            ...prev[configModal],
+            composeYaml: data.serviceYaml || ''
+          }
+        }));
       })
       .catch((e) => {
         if (!cancelled) setError(e.message);
@@ -245,6 +252,14 @@ function App() {
       return;
     }
     setServiceYamlDraft(data.serviceYaml || serviceYamlDraft);
+    setConfig((prev) => ({
+      ...prev,
+      [configModal]: {
+        ...prev[configModal],
+        composeYaml: data.serviceYaml || serviceYamlDraft
+      }
+    }));
+    await loadBootstrap();
     setMessage(`Configuration saved for ${configModal}.`);
   }
 
@@ -354,8 +369,6 @@ function App() {
           <label>Timezone</label><input value={config.runtime.timezone} onChange={(e) => update('runtime.timezone', e.target.value)} />
           <label>PUID</label><input value={config.runtime.puid} onChange={(e) => update('runtime.puid', e.target.value)} />
           <label>PGID</label><input value={config.runtime.pgid} onChange={(e) => update('runtime.pgid', e.target.value)} />
-          <label style={{ marginTop: 16 }}>Full Compose YAML</label>
-          <textarea className="codebox" value={config.composeYaml || ''} onChange={(e) => update('composeYaml', e.target.value)} />
         </>
       );
     }
@@ -378,15 +391,11 @@ function App() {
     }
 
     const appConfig = config[app];
-    const containerInfo = getContainerInfo(app);
     if (!appConfig) return null;
 
     return (
       <>
         <label className="check"><input type="checkbox" checked={!!appConfig.enabled} onChange={(e) => update(`${app}.enabled`, e.target.checked)} /> Enabled</label>
-        <label>Image</label><input value={containerInfo?.image || '-'} readOnly />
-        <label>URL</label><input value={appConfig.url || ''} onChange={(e) => update(`${app}.url`, e.target.value)} />
-        <label>Port</label><input value={appConfig.port || ''} onChange={(e) => update(`${app}.port`, e.target.value)} />
         <label>API Key ({appConfig.apiKey ? 'set' : 'not set'})</label>
         <div className="row wrap">
           <input type={showApiKeys[app] ? 'text' : 'password'} value={appConfig.apiKey || ''} onChange={(e) => update(`${app}.apiKey`, e.target.value)} />
@@ -400,6 +409,7 @@ function App() {
           <label>Movie Category</label><input value={appConfig.movieCategory || ''} onChange={(e) => update('sabnzbd.movieCategory', e.target.value)} />
         </> : null}
         {app === 'prowlarr' ? <p className="hint" style={{ marginTop: 8 }}>Sonarr/Radarr indexers are managed through Prowlarr only.</p> : null}
+        <p className="hint" style={{ marginTop: 8 }}>This app deploys from its own YAML only. Changes here affect this app when you click Deploy or RestartAll.</p>
 
         <label style={{ marginTop: 16 }}>Container Compose YAML</label>
         <textarea className="codebox" value={serviceYamlDraft} onChange={(e) => setServiceYamlDraft(e.target.value)} placeholder={serviceYamlLoading ? 'Loading container YAML...' : ''} disabled={serviceYamlLoading} />

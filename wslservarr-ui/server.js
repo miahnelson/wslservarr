@@ -652,13 +652,19 @@ function normalizeConfig(config) {
   next.runtime.timezone = next.runtime.timezone || 'America/New_York';
   next.runtime.puid = String(next.runtime.puid || '1000');
   next.runtime.pgid = String(next.runtime.pgid || '1000');
+  for (const appName of TARGET_CONTAINERS) {
+    next[appName].composeYaml = typeof next[appName].composeYaml === 'string' ? next[appName].composeYaml : '';
+  }
   next.setup = next.setup || {};
   next.setup.completed = Boolean(next.setup.completed);
   next.setup.completedAt = next.setup.completedAt || null;
   next.composeYaml = typeof next.composeYaml === 'string' ? next.composeYaml : '';
-  if (!next.composeYaml.trim()) {
-    next.composeYaml = buildAppsCompose(next);
+  for (const appName of TARGET_CONTAINERS) {
+    if (!next[appName].composeYaml.trim()) {
+      next[appName].composeYaml = getDefaultServiceYaml(next, appName);
+    }
   }
+  next.composeYaml = buildComposeFromIndependentYaml(next);
   return next;
 }
 
@@ -730,9 +736,7 @@ function buildConfigFromBody(body) {
     setup: prev.setup,
     composeYaml: typeof body.composeYaml === 'string' ? body.composeYaml : prev.composeYaml
   });
-  if (!next.composeYaml || !next.composeYaml.trim()) {
-    next.composeYaml = buildAppsCompose(next);
-  }
+  next.composeYaml = buildComposeFromIndependentYaml(next);
   return next;
 }
 
@@ -868,11 +872,8 @@ function extractServiceYaml(composeYaml, appName) {
   return lines.slice(start, end).join('\n').trimEnd();
 }
 
-function upsertServiceYaml(composeYaml, appName, serviceYaml) {
-  const base = String(composeYaml || '').trim() || 'services:\n';
-  const lines = base.split('\n');
-
-  const normalizedBlock = String(serviceYaml || '')
+function normalizeServiceYamlBlock(appName, serviceYaml) {
+  return String(serviceYaml || '')
     .split('\n')
     .map((line, idx) => {
       if (idx === 0) {
@@ -885,6 +886,38 @@ function upsertServiceYaml(composeYaml, appName, serviceYaml) {
     })
     .join('\n')
     .trimEnd();
+}
+
+function getDefaultServiceYaml(cfg, appName) {
+  return normalizeServiceYamlBlock(appName, extractServiceYaml(buildAppsCompose(cfg), appName));
+}
+
+function getAppServiceYaml(cfg, appName) {
+  const raw = String(cfg?.[appName]?.composeYaml || '').trim();
+  if (raw) {
+    return normalizeServiceYamlBlock(appName, raw);
+  }
+  return getDefaultServiceYaml(cfg, appName);
+}
+
+function buildComposeFromIndependentYaml(cfg, appNames = TARGET_CONTAINERS.filter((name) => cfg[name]?.enabled)) {
+  const blocks = appNames
+    .filter((name) => TARGET_CONTAINERS.includes(name))
+    .map((name) => getAppServiceYaml(cfg, name))
+    .filter(Boolean);
+
+  if (!blocks.length) {
+    return 'services:\n';
+  }
+
+  return `services:\n${blocks.map((block) => `${block}\n`).join('')}`;
+}
+
+function upsertServiceYaml(composeYaml, appName, serviceYaml) {
+  const base = String(composeYaml || '').trim() || 'services:\n';
+  const lines = base.split('\n');
+
+  const normalizedBlock = normalizeServiceYamlBlock(appName, serviceYaml);
 
   const hasServices = lines.some(line => line.trim() === 'services:');
   if (!hasServices) {
@@ -909,6 +942,15 @@ function upsertServiceYaml(composeYaml, appName, serviceYaml) {
   return `${updated.join('\n').trimEnd()}\n`;
 }
 
+function syncAppConfigFromServiceYaml(cfg, appName, serviceYaml) {
+  const text = String(serviceYaml || '');
+  const portMatch = text.match(/-\s*"?(?:\d{1,3}(?:\.\d{1,3}){3}:)?(\d+):(\d+)(?:\/\w+)?"?/);
+  if (portMatch && cfg[appName]) {
+    cfg[appName].port = portMatch[1];
+  }
+  return cfg;
+}
+
 function applyComposeHotfixes(composeYaml) {
   return String(composeYaml || '').replace(
     'lscr.io/linuxserver/sonarr:latest',
@@ -925,7 +967,7 @@ async function installOrUpdateAppsWithProgress(config, onProgress) {
     if (onProgress) onProgress(`Ensured directory: ${d}`);
   }
 
-  const composeYaml = (cfg.composeYaml && cfg.composeYaml.trim()) ? cfg.composeYaml : buildAppsCompose(cfg);
+  const composeYaml = buildComposeFromIndependentYaml(cfg);
   fs.writeFileSync(APPS_COMPOSE_PATH, applyComposeHotfixes(composeYaml));
   if (onProgress) onProgress(`Wrote compose file: ${APPS_COMPOSE_PATH}`);
 
@@ -955,11 +997,7 @@ async function installOrUpdateSingleAppWithProgress(config, appName, onProgress)
     if (onProgress) onProgress(`${appName} was disabled in config, enabling for deployment.`);
   }
 
-  let composeYaml = (cfg.composeYaml && cfg.composeYaml.trim()) ? cfg.composeYaml : buildAppsCompose(cfg);
-  if (!composeYaml.includes(`  ${appName}:`)) {
-    composeYaml = buildAppsCompose(cfg);
-    if (onProgress) onProgress(`Custom compose did not define ${appName}; using generated compose for deployment.`);
-  }
+  const composeYaml = buildComposeFromIndependentYaml(cfg, [appName]);
 
   fs.writeFileSync(APPS_COMPOSE_PATH, applyComposeHotfixes(composeYaml));
   if (onProgress) onProgress(`Wrote compose file: ${APPS_COMPOSE_PATH}`);
@@ -1091,11 +1129,7 @@ app.get('/api/yaml/:appName', (req, res) => {
   }
 
   const cfg = normalizeConfig(readConfig());
-  const composeYaml = (cfg.composeYaml && cfg.composeYaml.trim()) ? cfg.composeYaml : buildAppsCompose(cfg);
-  let serviceYaml = extractServiceYaml(composeYaml, appName);
-  if (!serviceYaml) {
-    serviceYaml = extractServiceYaml(buildAppsCompose(cfg), appName);
-  }
+  const serviceYaml = getAppServiceYaml(cfg, appName);
 
   return res.json({ ok: true, appName, serviceYaml });
 });
@@ -1113,11 +1147,12 @@ app.post('/api/yaml/:appName', (req, res) => {
     }
 
     const cfg = normalizeConfig(readConfig());
-    const composeYaml = (cfg.composeYaml && cfg.composeYaml.trim()) ? cfg.composeYaml : buildAppsCompose(cfg);
-    cfg.composeYaml = upsertServiceYaml(composeYaml, appName, raw);
+    cfg[appName].composeYaml = normalizeServiceYamlBlock(appName, raw);
+    syncAppConfigFromServiceYaml(cfg, appName, cfg[appName].composeYaml);
+    cfg.composeYaml = buildComposeFromIndependentYaml(cfg);
     writeConfig(cfg);
 
-    return res.json({ ok: true, appName, serviceYaml: extractServiceYaml(cfg.composeYaml, appName) });
+    return res.json({ ok: true, appName, serviceYaml: cfg[appName].composeYaml, config: cfg });
   } catch (e) {
     return res.status(400).json({ ok: false, error: e.message });
   }
@@ -1263,11 +1298,27 @@ app.post('/container/:name/:action', async (req, res) => {
   }
 
   try {
-    const container = docker.getContainer(name);
-    if (action === 'start') await container.start();
-    else if (action === 'stop') await container.stop();
-    else if (action === 'restart') await container.restart();
-    else return res.status(400).json({ error: 'Invalid action' });
+    if (action === 'start' || action === 'restart') {
+      const cfg = normalizeConfig(readConfig());
+      if (!cfg[name]?.enabled) {
+        cfg[name].enabled = true;
+      }
+
+      const composeYaml = buildComposeFromIndependentYaml(cfg, [name]);
+      fs.writeFileSync(APPS_COMPOSE_PATH, applyComposeHotfixes(composeYaml));
+
+      const args = ['compose', '-f', APPS_COMPOSE_PATH, 'up', '-d'];
+      if (action === 'restart') {
+        args.push('--force-recreate');
+      }
+      args.push(name);
+      await execFileAsync('docker', args);
+    } else if (action === 'stop') {
+      const container = docker.getContainer(name);
+      await container.stop();
+    } else {
+      return res.status(400).json({ error: 'Invalid action' });
+    }
 
     return res.json({ ok: true });
   } catch (e) {
