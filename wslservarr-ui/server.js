@@ -674,6 +674,22 @@ async function applyIntegrationsWithProgress(cfg, appName = null, onProgress) {
   }
 }
 
+async function autoConfigureProwlarrApplications(cfg, onProgress) {
+  if (!cfg?.prowlarr?.enabled || !cfg?.prowlarr?.apiKey) return;
+
+  const appTargets = ['sonarr', 'radarr'];
+  for (const app of appTargets) {
+    const arrCfg = cfg[app];
+    if (!arrCfg?.enabled || !arrCfg?.apiKey) {
+      if (onProgress) onProgress(`Skipping Prowlarr application auto-config for ${app} (disabled or API key missing).`);
+      continue;
+    }
+
+    if (onProgress) onProgress(`Auto-configuring Prowlarr application for ${app}...`);
+    await retryAsync(() => upsertProwlarrApplication(app, cfg), 8, 2500);
+  }
+}
+
 async function ensureRootFolder(appName, cfg) {
   const arr = appName === 'sonarr' ? cfg.sonarr : cfg.radarr;
   const rootPath = appName === 'sonarr' ? arr.tvRoot : arr.movieRoot;
@@ -1099,34 +1115,75 @@ async function installOrUpdateSingleAppWithProgress(config, appName, onProgress)
   if (onProgress) onProgress(`${appName} deployment completed.`);
 }
 
-function startDeployJob(config, appName) {
-  if (deployState.running) {
-    throw new Error('A deployment is already in progress.');
+async function restartAppsWithProgress(config, appName = null, onProgress) {
+  const cfg = normalizeConfig(config);
+  const appNames = appName
+    ? [appName]
+    : TARGET_CONTAINERS.filter((name) => cfg[name]?.enabled);
+
+  if (!appNames.length) {
+    throw new Error('No enabled apps available to restart.');
   }
-  if (!TARGET_CONTAINERS.includes(appName)) {
+
+  if (appName && !TARGET_CONTAINERS.includes(appName)) {
     throw new Error(`Unknown app: ${appName}`);
+  }
+
+  if (appName && !cfg[appName]?.enabled) {
+    cfg[appName].enabled = true;
+    if (onProgress) onProgress(`${appName} was disabled in config, enabling for restart.`);
+  }
+
+  const composeYaml = buildComposeFromIndependentYaml(cfg, appNames);
+  fs.writeFileSync(APPS_COMPOSE_PATH, applyComposeHotfixes(composeYaml));
+  if (onProgress) onProgress(`Wrote compose file: ${APPS_COMPOSE_PATH}`);
+
+  for (const name of appNames) {
+    if (onProgress) onProgress(`Recreating ${name}...`);
+    await runCommandWithProgress(
+      'docker',
+      ['compose', '-f', APPS_COMPOSE_PATH, 'up', '-d', '--force-recreate', '--no-deps', name],
+      `restart:${name}`,
+      onProgress
+    );
+  }
+
+  if (onProgress) onProgress('Restart completed.');
+}
+
+function startOperationJob(operation, config, appName = null) {
+  if (deployState.running) {
+    throw new Error(`A ${deployState.operation || 'deployment'} is already in progress.`);
   }
 
   setDeployState({
     running: true,
+    operation,
     startedAt: new Date().toISOString(),
     finishedAt: null,
     success: null,
     error: '',
     logs: []
   });
-  pushDeployLog(`Deployment started for ${appName}...`);
+  pushDeployLog(appName ? `${operation === 'restart' ? 'Restart' : 'Deployment'} started for ${appName}...` : `${operation === 'restart' ? 'Restart' : 'Deployment'} started...`);
 
   (async () => {
     try {
       const cfg = normalizeConfig(config);
-      await installOrUpdateSingleAppWithProgress(cfg, appName, pushDeployLog);
+      if (operation === 'restart') {
+        await restartAppsWithProgress(cfg, appName, pushDeployLog);
+      } else if (appName) {
+        await installOrUpdateSingleAppWithProgress(cfg, appName, pushDeployLog);
 
-      pushDeployLog('Running automatic post-deploy app configuration...');
-      await applyIntegrationsWithProgress(cfg, appName, pushDeployLog);
+        pushDeployLog('Running automatic post-deploy app configuration...');
+        await applyIntegrationsWithProgress(cfg, appName, pushDeployLog);
+      } else {
+        throw new Error(`Unsupported operation: ${operation}`);
+      }
 
       setDeployState({
         running: false,
+        operation,
         finishedAt: new Date().toISOString(),
         success: true,
         error: ''
@@ -1136,6 +1193,7 @@ function startDeployJob(config, appName) {
       pushDeployLog(`ERROR: ${e.message}`);
       setDeployState({
         running: false,
+        operation,
         finishedAt: new Date().toISOString(),
         success: false,
         error: e.message
@@ -1143,6 +1201,22 @@ function startDeployJob(config, appName) {
       emitDeployEvent('done', { state: deployState });
     }
   })();
+}
+
+function startDeployJob(config, appName) {
+  if (!TARGET_CONTAINERS.includes(appName)) {
+    throw new Error(`Unknown app: ${appName}`);
+  }
+
+  startOperationJob('deploy', config, appName);
+}
+
+function startRestartJob(config, appName = null) {
+  if (appName && !TARGET_CONTAINERS.includes(appName)) {
+    throw new Error(`Unknown app: ${appName}`);
+  }
+
+  startOperationJob('restart', config, appName);
 }
 
 function sendSpa(res) {
@@ -1316,6 +1390,31 @@ app.post('/api/install/apps/:appName/start', (req, res) => {
   }
 });
 
+app.post('/api/install/apps/restart', (req, res) => {
+  try {
+    const cfg = normalizeConfig(readConfig());
+    startRestartJob(cfg);
+    return res.json({ ok: true, state: deployState });
+  } catch (e) {
+    return res.status(409).json({ ok: false, error: e.message, state: deployState });
+  }
+});
+
+app.post('/api/install/apps/:appName/restart', (req, res) => {
+  try {
+    const appName = req.params.appName;
+    if (!TARGET_CONTAINERS.includes(appName)) {
+      return res.status(400).json({ ok: false, error: 'Unknown app', state: deployState });
+    }
+
+    const cfg = normalizeConfig(readConfig());
+    startRestartJob(cfg, appName);
+    return res.json({ ok: true, state: deployState });
+  } catch (e) {
+    return res.status(409).json({ ok: false, error: e.message, state: deployState });
+  }
+});
+
 app.get('/api/diagnostics/:appName', async (req, res) => {
   try {
     const appName = req.params.appName;
@@ -1426,4 +1525,15 @@ app.post('/container/:name/:action', async (req, res) => {
 app.listen(PORT, () => {
   ensureConfig();
   console.log(`wslservarr-ui listening on ${PORT}`);
+
+  setTimeout(() => {
+    try {
+      const cfg = normalizeConfig(readConfig());
+      autoConfigureProwlarrApplications(cfg).catch((e) => {
+        console.warn(`Prowlarr auto-config failed: ${e.message}`);
+      });
+    } catch (e) {
+      console.warn(`Prowlarr auto-config skipped: ${e.message}`);
+    }
+  }, 5000);
 });
