@@ -555,6 +555,89 @@ async function upsertArrProwlarrIndexer(appName, cfg) {
   }
 }
 
+function getProwlarrApplicationProfile(appName, cfg) {
+  const prowlarrUrl = String(cfg?.prowlarr?.url || '').replace(/\/$/, '');
+  if (!prowlarrUrl) return null;
+
+  if (appName === 'sonarr') {
+    return {
+      name: 'Sonarr',
+      prowlarrUrl,
+      baseUrl: String(cfg?.sonarr?.url || '').replace(/\/$/, ''),
+      apiKey: cfg?.sonarr?.apiKey || '',
+      syncCategories: [5000, 5010, 5020, 5030, 5040, 5045, 5050, 5090],
+      animeSyncCategories: [5070]
+    };
+  }
+
+  if (appName === 'radarr') {
+    return {
+      name: 'Radarr',
+      prowlarrUrl,
+      baseUrl: String(cfg?.radarr?.url || '').replace(/\/$/, ''),
+      apiKey: cfg?.radarr?.apiKey || '',
+      syncCategories: [2000, 2010, 2020, 2030, 2040, 2045, 2050, 2060, 2070, 2080, 2090]
+    };
+  }
+
+  return null;
+}
+
+function mapProwlarrApplicationFields(schemaFields, profile) {
+  const aliases = {
+    prowlarrurl: profile.prowlarrUrl,
+    baseurl: profile.baseUrl,
+    url: profile.prowlarrUrl,
+    apikey: profile.apiKey,
+    synccategories: profile.syncCategories,
+    animesynccategories: profile.animeSyncCategories
+  };
+
+  return (schemaFields || []).map((f) => {
+    const next = { ...f };
+    const key = String(f.name || '').replace(/[^a-z0-9]/gi, '').toLowerCase();
+    if (Object.prototype.hasOwnProperty.call(aliases, key)) {
+      next.value = aliases[key];
+    }
+    return next;
+  });
+}
+
+async function upsertProwlarrApplication(appName, cfg) {
+  const profile = getProwlarrApplicationProfile(appName, cfg);
+  if (!profile?.prowlarrUrl || !profile?.baseUrl || !profile?.apiKey) return;
+  if (!cfg?.prowlarr?.enabled || !cfg?.prowlarr?.apiKey) return;
+
+  const client = apiClient(cfg.prowlarr.url, cfg.prowlarr.apiKey);
+  const schemaRes = await client.get('/api/v1/applications/schema');
+  const schemaList = Array.isArray(schemaRes.data) ? schemaRes.data : [];
+  const schema = schemaList.find(s => String(s.implementationName || '').toLowerCase() === appName);
+  if (!schema) throw new Error(`Prowlarr application schema for ${appName} not found`);
+
+  const listRes = await client.get('/api/v1/applications');
+  const existingList = Array.isArray(listRes.data) ? listRes.data : [];
+  const existing = existingList.find(item => String(item.implementationName || '').toLowerCase() === appName);
+
+  const fields = mapProwlarrApplicationFields(schema.fields, profile);
+  const payload = {
+    ...(existing || {}),
+    enable: true,
+    name: profile.name,
+    syncLevel: 'fullSync',
+    implementation: schema.implementation,
+    implementationName: schema.implementationName,
+    configContract: schema.configContract,
+    fields,
+    tags: existing?.tags || []
+  };
+
+  if (existing?.id) {
+    await client.put(`/api/v1/applications/${existing.id}`, payload);
+  } else {
+    await client.post('/api/v1/applications', payload);
+  }
+}
+
 async function applyIntegrationsWithProgress(cfg, appName = null, onProgress) {
   const appTargets = appName && ['sonarr', 'radarr'].includes(appName)
     ? [appName]
@@ -575,18 +658,18 @@ async function applyIntegrationsWithProgress(cfg, appName = null, onProgress) {
     if (onProgress) onProgress(`Applying ${app} root folder...`);
     await retryAsync(() => ensureRootFolder(app, cfg), 8, 2500);
 
+    if (cfg.prowlarr?.enabled && cfg.prowlarr?.apiKey) {
+      if (onProgress) onProgress(`Applying Prowlarr application for ${app}...`);
+      await retryAsync(() => upsertProwlarrApplication(app, cfg), 8, 2500);
+    } else if (onProgress) {
+      onProgress(`Skipping ${app} Prowlarr application setup (Prowlarr disabled or API key missing).`);
+    }
+
     if (cfg.sabnzbd?.enabled && cfg.sabnzbd?.apiKey) {
       if (onProgress) onProgress(`Applying ${app} download client (SABnzbd)...`);
       await retryAsync(() => upsertArrDownloadClient(app, cfg), 8, 2500);
     } else if (onProgress) {
       onProgress(`Skipping ${app} SABnzbd downloader setup (SAB disabled or API key missing).`);
-    }
-
-    if (cfg.prowlarr?.enabled && cfg.prowlarr?.apiKey) {
-      if (onProgress) onProgress(`Applying ${app} Prowlarr indexer...`);
-      await retryAsync(() => upsertArrProwlarrIndexer(app, cfg), 8, 2500);
-    } else if (onProgress) {
-      onProgress(`Skipping ${app} Prowlarr indexer setup (Prowlarr disabled or API key missing).`);
     }
   }
 }
@@ -1202,14 +1285,14 @@ app.post('/api/apply', async (req, res) => {
 
     if (canSonarr) {
       await ensureRootFolder('sonarr', cfg);
+      if (canProwlarr) await upsertProwlarrApplication('sonarr', cfg);
       if (canSab) await upsertArrDownloadClient('sonarr', cfg);
-      if (canProwlarr) await upsertArrProwlarrIndexer('sonarr', cfg);
     }
 
     if (canRadarr) {
       await ensureRootFolder('radarr', cfg);
+      if (canProwlarr) await upsertProwlarrApplication('radarr', cfg);
       if (canSab) await upsertArrDownloadClient('radarr', cfg);
-      if (canProwlarr) await upsertArrProwlarrIndexer('radarr', cfg);
     }
 
     res.json({ ok: true, message: 'Applied settings to detected apps (SAB + Arr + Prowlarr)' });
@@ -1321,6 +1404,12 @@ app.post('/container/:name/:action', async (req, res) => {
           COMPOSE_IGNORE_ORPHANS: 'true'
         }
       });
+
+      if (name === 'prowlarr' || name === 'sonarr' || name === 'radarr') {
+        const refreshed = normalizeConfig(readConfig());
+        const targetApp = name === 'prowlarr' ? null : name;
+        await applyIntegrationsWithProgress(refreshed, targetApp);
+      }
     } else if (action === 'stop') {
       const container = docker.getContainer(name);
       await container.stop();
