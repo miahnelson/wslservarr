@@ -16,6 +16,7 @@ const DIAGNOSTICS_DIR = process.env.DIAGNOSTICS_DIR || '/data/diagnostics';
 const API_TOKEN = (process.env.WSLSERVARR_API_TOKEN || '').trim();
 const TARGET_CONTAINERS = ['sabnzbd', 'prowlarr', 'sonarr', 'radarr', 'jellyfin'];
 const APPS_COMPOSE_PATH = '/opt/wslservarr/compose.apps.yml';
+const SHARED_DOCKER_NETWORK = 'wslservarr';
 const execFileAsync = promisify(execFile);
 const deployClients = new Set();
 const deployState = {
@@ -362,6 +363,26 @@ function apiClient(baseUrl, apiKey) {
     timeout: 10000,
     headers: { 'X-Api-Key': apiKey }
   });
+}
+
+async function ensureSharedDockerNetwork() {
+  try {
+    await docker.getNetwork(SHARED_DOCKER_NETWORK).inspect();
+  } catch {
+    try {
+      await docker.createNetwork({
+        Name: SHARED_DOCKER_NETWORK,
+        CheckDuplicate: true,
+        Driver: 'bridge',
+        Attachable: true,
+        Internal: false
+      });
+    } catch (e) {
+      if (!String(e?.message || '').toLowerCase().includes('already exists')) {
+        throw e;
+      }
+    }
+  }
 }
 
 async function testArr(url, apiKey) {
@@ -896,6 +917,7 @@ function buildAppsCompose(cfg) {
   const downloadsRoot = cfg.paths.downloadsRoot || '/mnt/downloads';
 
   let compose = 'services:\n';
+  const sharedNetworkBlock = `\nnetworks:\n  ${SHARED_DOCKER_NETWORK}:\n    external: true\n    name: ${SHARED_DOCKER_NETWORK}\n`;
 
   if (cfg.sabnzbd.enabled) {
     compose += `  sabnzbd:
@@ -909,7 +931,9 @@ function buildAppsCompose(cfg) {
       - /mnt/config/sabnzbd:/config
       - ${downloadsRoot}:/downloads
     ports:
-      - "${cfg.sabnzbd.port}:8080"
+      - "0.0.0.0:${cfg.sabnzbd.port}:8080"
+    networks:
+      - ${SHARED_DOCKER_NETWORK}
     restart: unless-stopped
 
 `;
@@ -928,7 +952,9 @@ function buildAppsCompose(cfg) {
       - ${mediaRoot}:/media
       - ${downloadsRoot}:/downloads
     ports:
-      - "${cfg.sonarr.port}:8989"
+      - "0.0.0.0:${cfg.sonarr.port}:8989"
+    networks:
+      - ${SHARED_DOCKER_NETWORK}
     restart: unless-stopped
 
 `;
@@ -947,7 +973,9 @@ function buildAppsCompose(cfg) {
       - ${mediaRoot}:/media
       - ${downloadsRoot}:/downloads
     ports:
-      - "${cfg.radarr.port}:7878"
+      - "0.0.0.0:${cfg.radarr.port}:7878"
+    networks:
+      - ${SHARED_DOCKER_NETWORK}
     restart: unless-stopped
 
 `;
@@ -964,7 +992,9 @@ function buildAppsCompose(cfg) {
     volumes:
       - /mnt/config/prowlarr:/config
     ports:
-      - "${cfg.prowlarr.port}:9696"
+      - "0.0.0.0:${cfg.prowlarr.port}:9696"
+    networks:
+      - ${SHARED_DOCKER_NETWORK}
     restart: unless-stopped
 
 `;
@@ -982,13 +1012,15 @@ function buildAppsCompose(cfg) {
       - /mnt/config/jellyfin:/config
       - ${mediaRoot}:/media
     ports:
-      - "${cfg.jellyfin.port}:8096"
+      - "0.0.0.0:${cfg.jellyfin.port}:8096"
+    networks:
+      - ${SHARED_DOCKER_NETWORK}
     restart: unless-stopped
 
 `;
   }
 
-  return compose;
+  return `${compose}${sharedNetworkBlock}`;
 }
 
 function extractServiceYaml(composeYaml, appName) {
@@ -1064,10 +1096,10 @@ function buildComposeFromIndependentYaml(cfg, appNames = TARGET_CONTAINERS.filte
     .filter(Boolean);
 
   if (!blocks.length) {
-    return 'services:\n';
+    return `services:\n\nnetworks:\n  ${SHARED_DOCKER_NETWORK}:\n    external: true\n    name: ${SHARED_DOCKER_NETWORK}\n`;
   }
 
-  return `services:\n${blocks.map((block) => `${block}\n`).join('')}`;
+  return `services:\n${blocks.map((block) => `${block}\n`).join('')}\nnetworks:\n  ${SHARED_DOCKER_NETWORK}:\n    external: true\n    name: ${SHARED_DOCKER_NETWORK}\n`;
 }
 
 function upsertServiceYaml(composeYaml, appName, serviceYaml) {
@@ -1132,6 +1164,8 @@ async function installOrUpdateSingleAppWithProgress(config, appName, onProgress)
     if (onProgress) onProgress(`${appName} was disabled in config, enabling for deployment.`);
   }
 
+  await ensureSharedDockerNetwork();
+
   const composeYaml = buildComposeFromIndependentYaml(cfg, [appName]);
 
   fs.writeFileSync(APPS_COMPOSE_PATH, applyComposeHotfixes(composeYaml));
@@ -1164,6 +1198,8 @@ async function restartAppsWithProgress(config, appName = null, onProgress) {
     cfg[appName].enabled = true;
     if (onProgress) onProgress(`${appName} was disabled in config, enabling for restart.`);
   }
+
+  await ensureSharedDockerNetwork();
 
   const composeYaml = buildComposeFromIndependentYaml(cfg, appNames);
   fs.writeFileSync(APPS_COMPOSE_PATH, applyComposeHotfixes(composeYaml));
@@ -1521,6 +1557,8 @@ app.post('/container/:name/:action', async (req, res) => {
       if (!cfg[name]?.enabled) {
         cfg[name].enabled = true;
       }
+
+      await ensureSharedDockerNetwork();
 
       const composeYaml = buildComposeFromIndependentYaml(cfg, [name]);
       fs.writeFileSync(APPS_COMPOSE_PATH, applyComposeHotfixes(composeYaml));
