@@ -37,6 +37,12 @@ function App() {
   const [saving, setSaving] = useState(false);
   const [showApiKeys, setShowApiKeys] = useState({ sonarr: false, radarr: false, sabnzbd: false, prowlarr: false, jellyfin: false });
   const [configModal, setConfigModal] = useState(null);
+  const [serviceYamlDraft, setServiceYamlDraft] = useState('');
+  const [serviceYamlLoading, setServiceYamlLoading] = useState(false);
+  const [deployState, setDeployState] = useState({ running: false, startedAt: null, finishedAt: null, success: null, error: '', logs: [] });
+  const [showDeployOutput, setShowDeployOutput] = useState(false);
+
+  const appModalNames = ['sonarr', 'radarr', 'sabnzbd', 'prowlarr', 'jellyfin'];
 
   const runningCount = useMemo(() => containers.filter((c) => c.status === 'running').length, [containers]);
 
@@ -60,6 +66,60 @@ function App() {
     loadBootstrap();
   }, []);
 
+  useEffect(() => {
+    const stream = new EventSource('/api/install/apps/stream');
+
+    stream.onmessage = (event) => {
+      try {
+        const payload = JSON.parse(event.data);
+        if (payload?.state) {
+          setDeployState(payload.state);
+          if (payload.state.running || (Array.isArray(payload.state.logs) && payload.state.logs.length)) {
+            setShowDeployOutput(true);
+          }
+        }
+      } catch {
+        // ignore malformed stream data
+      }
+    };
+
+    stream.onerror = () => {
+      // keep browser retry behavior
+    };
+
+    return () => stream.close();
+  }, []);
+
+  useEffect(() => {
+    if (!configModal || !appModalNames.includes(configModal)) {
+      setServiceYamlDraft('');
+      setServiceYamlLoading(false);
+      return;
+    }
+
+    let cancelled = false;
+    setServiceYamlLoading(true);
+    setServiceYamlDraft('');
+
+    fetch(`/api/yaml/${configModal}`)
+      .then((res) => res.json())
+      .then((data) => {
+        if (cancelled) return;
+        if (!data?.ok) throw new Error(data?.error || 'Failed to load container YAML.');
+        setServiceYamlDraft(data.serviceYaml || '');
+      })
+      .catch((e) => {
+        if (!cancelled) setError(e.message);
+      })
+      .finally(() => {
+        if (!cancelled) setServiceYamlLoading(false);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [configModal]);
+
   function update(path, value) {
     setConfig((prev) => {
       const next = structuredClone(prev);
@@ -78,6 +138,10 @@ function App() {
     if (appName === 'prowlarr') return `http://localhost:${config?.prowlarr?.port || 9696}`;
     if (appName === 'jellyfin') return `http://localhost:${config?.jellyfin?.port || 8096}`;
     return '';
+  }
+
+  function getContainerInfo(appName) {
+    return containers.find((c) => c.name === appName) || null;
   }
 
   function toggleShowApiKey(appName) {
@@ -159,6 +223,31 @@ function App() {
     }
   }
 
+  async function saveModalConfig() {
+    await saveConfig();
+    if (!configModal || !appModalNames.includes(configModal)) {
+      return;
+    }
+
+    if (!serviceYamlDraft.trim()) {
+      setError('Container Compose YAML cannot be empty.');
+      return;
+    }
+
+    const res = await fetch(`/api/yaml/${configModal}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ serviceYaml: serviceYamlDraft })
+    });
+    const data = await res.json();
+    if (!res.ok || !data.ok) {
+      setError(data.error || `Failed to save YAML for ${configModal}`);
+      return;
+    }
+    setServiceYamlDraft(data.serviceYaml || serviceYamlDraft);
+    setMessage(`Configuration saved for ${configModal}.`);
+  }
+
   async function applySettings() {
     setMessage('');
     setError('');
@@ -212,6 +301,7 @@ function App() {
   async function deployApp(appName) {
     setMessage('');
     setError('');
+    setShowDeployOutput(true);
     const res = await fetch(`/api/install/apps/${appName}/start`, { method: 'POST' });
     const data = await res.json();
     if (!res.ok || !data.ok) {
@@ -224,6 +314,7 @@ function App() {
   async function deployAll() {
     setMessage('');
     setError('');
+    setShowDeployOutput(true);
     const res = await fetch('/api/install/apps/start', { method: 'POST' });
     const data = await res.json();
     if (!res.ok || !data.ok) {
@@ -238,6 +329,82 @@ function App() {
     if (status === 'missing') return 'pill missing';
     if (String(status || '').startsWith('error')) return 'pill error';
     return 'pill stopped';
+  }
+
+  const modalTitles = {
+    paths: 'Paths & Runtime',
+    newshosting: 'Newshosting Server',
+    sonarr: 'Sonarr',
+    radarr: 'Radarr',
+    sabnzbd: 'SABnzbd',
+    prowlarr: 'Prowlarr',
+    jellyfin: 'Jellyfin'
+  };
+
+  function renderConfigModal() {
+    const app = configModal;
+    if (!app) return null;
+
+    if (app === 'paths') {
+      return (
+        <>
+          <label>Media Root</label><input value={config.paths.mediaRoot} onChange={(e) => update('paths.mediaRoot', e.target.value)} />
+          <label>Downloads Root</label><input value={config.paths.downloadsRoot} onChange={(e) => update('paths.downloadsRoot', e.target.value)} />
+          <label>Config Root</label><input value={config.paths.configRoot || ''} onChange={(e) => update('paths.configRoot', e.target.value)} />
+          <label>Timezone</label><input value={config.runtime.timezone} onChange={(e) => update('runtime.timezone', e.target.value)} />
+          <label>PUID</label><input value={config.runtime.puid} onChange={(e) => update('runtime.puid', e.target.value)} />
+          <label>PGID</label><input value={config.runtime.pgid} onChange={(e) => update('runtime.pgid', e.target.value)} />
+          <label style={{ marginTop: 16 }}>Full Compose YAML</label>
+          <textarea className="codebox" value={config.composeYaml || ''} onChange={(e) => update('composeYaml', e.target.value)} />
+        </>
+      );
+    }
+
+    if (app === 'newshosting') {
+      return (
+        <>
+          <label className="check"><input type="checkbox" checked={!!config.newshosting.enabled} onChange={(e) => update('newshosting.enabled', e.target.checked)} /> Enabled</label>
+          <label>Name</label><input value={config.newshosting.name} onChange={(e) => update('newshosting.name', e.target.value)} />
+          <label>Host</label><input value={config.newshosting.host} onChange={(e) => update('newshosting.host', e.target.value)} />
+          <label>Port</label><input value={config.newshosting.port} onChange={(e) => update('newshosting.port', e.target.value)} />
+          <label>Username</label><input value={config.newshosting.username} onChange={(e) => update('newshosting.username', e.target.value)} />
+          <label>Password</label><input type="password" value={config.newshosting.password} onChange={(e) => update('newshosting.password', e.target.value)} />
+          <label className="check"><input type="checkbox" checked={!!config.newshosting.ssl} onChange={(e) => update('newshosting.ssl', e.target.checked)} /> SSL</label>
+          <label className="check"><input type="checkbox" checked={!!config.newshosting.optional} onChange={(e) => update('newshosting.optional', e.target.checked)} /> Optional</label>
+          <label>Connections</label><input value={config.newshosting.connections} onChange={(e) => update('newshosting.connections', e.target.value)} />
+          <label>Retention</label><input value={config.newshosting.retention} onChange={(e) => update('newshosting.retention', e.target.value)} />
+        </>
+      );
+    }
+
+    const appConfig = config[app];
+    const containerInfo = getContainerInfo(app);
+    if (!appConfig) return null;
+
+    return (
+      <>
+        <label className="check"><input type="checkbox" checked={!!appConfig.enabled} onChange={(e) => update(`${app}.enabled`, e.target.checked)} /> Enabled</label>
+        <label>Image</label><input value={containerInfo?.image || '-'} readOnly />
+        <label>URL</label><input value={appConfig.url || ''} onChange={(e) => update(`${app}.url`, e.target.value)} />
+        <label>Port</label><input value={appConfig.port || ''} onChange={(e) => update(`${app}.port`, e.target.value)} />
+        <label>API Key ({appConfig.apiKey ? 'set' : 'not set'})</label>
+        <div className="row wrap">
+          <input type={showApiKeys[app] ? 'text' : 'password'} value={appConfig.apiKey || ''} onChange={(e) => update(`${app}.apiKey`, e.target.value)} />
+          <button type="button" className="secondary" onClick={() => toggleShowApiKey(app)}>{showApiKeys[app] ? 'Hide' : 'Show'}</button>
+        </div>
+
+        {app === 'sonarr' ? <><label>TV Root</label><input value={appConfig.tvRoot || ''} onChange={(e) => update('sonarr.tvRoot', e.target.value)} /></> : null}
+        {app === 'radarr' ? <><label>Movie Root</label><input value={appConfig.movieRoot || ''} onChange={(e) => update('radarr.movieRoot', e.target.value)} /></> : null}
+        {app === 'sabnzbd' ? <>
+          <label>TV Category</label><input value={appConfig.tvCategory || ''} onChange={(e) => update('sabnzbd.tvCategory', e.target.value)} />
+          <label>Movie Category</label><input value={appConfig.movieCategory || ''} onChange={(e) => update('sabnzbd.movieCategory', e.target.value)} />
+        </> : null}
+        {app === 'prowlarr' ? <p className="hint" style={{ marginTop: 8 }}>Sonarr/Radarr indexers are managed through Prowlarr only.</p> : null}
+
+        <label style={{ marginTop: 16 }}>Container Compose YAML</label>
+        <textarea className="codebox" value={serviceYamlDraft} onChange={(e) => setServiceYamlDraft(e.target.value)} placeholder={serviceYamlLoading ? 'Loading container YAML...' : ''} disabled={serviceYamlLoading} />
+      </>
+    );
   }
 
   if (loading) return <div className="page"><h1>WSLServarr</h1><p>Loading...</p></div>;
@@ -264,25 +431,34 @@ function App() {
       </section>
 
       <section className="card">
-        <h2>Runtime</h2>
+        <div className="row wrap runtime-toolbar" style={{ justifyContent: 'space-between', marginBottom: 12 }}>
+          <h2 style={{ margin: 0 }}>Runtime</h2>
+          <div className="row wrap">
+            <button className="secondary" type="button" onClick={() => setConfigModal('paths')}>Paths & Runtime</button>
+            <button className="secondary" type="button" onClick={() => setConfigModal('newshosting')}>Newshosting</button>
+            <button className="secondary" type="button" onClick={discoverApiKeys}>Auto-Fill API Keys</button>
+            <button className="secondary" type="button" onClick={applySettings}>Apply to Apps</button>
+            <button type="button" onClick={saveConfig} disabled={saving}>{saving ? 'Saving...' : 'Save All'}</button>
+          </div>
+        </div>
         <table>
           <thead>
-            <tr><th>Service</th><th>Status</th><th>Image</th><th>URL</th><th>Actions</th></tr>
+            <tr><th>Service</th><th>Status</th><th>URL</th><th>Actions</th></tr>
           </thead>
           <tbody>
             {containers.map((c) => (
               <tr key={c.name}>
                 <td>{c.name}</td>
                 <td><span className={statusClass(c.status)}>{c.status}</span></td>
-                <td>{c.image || '-'}</td>
                 <td>{getAppUrl(c.name) ? <a href={getAppUrl(c.name)} target="_blank" rel="noreferrer">{getAppUrl(c.name)}</a> : '-'}</td>
                 <td>
                   <div className="row wrap">
-                    <button className="secondary" onClick={() => containerAction(c.name, 'start')}>Start</button>
-                    <button className="secondary" onClick={() => containerAction(c.name, 'stop')}>Stop</button>
-                    <button className="secondary" onClick={() => containerAction(c.name, 'restart')}>Restart</button>
-                    <button className="secondary" onClick={() => testConnection(c.name)}>Test</button>
-                    <button onClick={() => deployApp(c.name)}>Deploy</button>
+                    <button type="button" className="secondary" onClick={() => containerAction(c.name, 'start')}>Start</button>
+                    <button type="button" className="secondary" onClick={() => containerAction(c.name, 'stop')}>Stop</button>
+                    <button type="button" className="secondary" onClick={() => containerAction(c.name, 'restart')}>Restart</button>
+                    <button type="button" className="secondary" onClick={() => testConnection(c.name)}>Test</button>
+                    <button type="button" onClick={() => deployApp(c.name)}>Deploy</button>
+                    <button type="button" className="secondary" onClick={() => setConfigModal(c.name)}>Configure</button>
                   </div>
                 </td>
               </tr>
@@ -291,126 +467,52 @@ function App() {
         </table>
       </section>
 
-      <section className="card">
-        <h2 style={{ marginBottom: 16 }}>Configuration</h2>
-
-        <details className="card" style={{ marginTop: 8 }}>
-          <summary>Paths & Runtime</summary>
-          <div style={{ paddingTop: 12 }}>
-            <label>Media Root</label><input value={config.paths.mediaRoot} onChange={(e) => update('paths.mediaRoot', e.target.value)} />
-            <label>Downloads Root</label><input value={config.paths.downloadsRoot} onChange={(e) => update('paths.downloadsRoot', e.target.value)} />
-            <label>Config Root</label><input value={config.paths.configRoot || ''} onChange={(e) => update('paths.configRoot', e.target.value)} />
-            <label>Timezone</label><input value={config.runtime.timezone} onChange={(e) => update('runtime.timezone', e.target.value)} />
-            <label>PUID</label><input value={config.runtime.puid} onChange={(e) => update('runtime.puid', e.target.value)} />
-            <label>PGID</label><input value={config.runtime.pgid} onChange={(e) => update('runtime.pgid', e.target.value)} />
-          </div>
-        </details>
-
-        <details className="card" style={{ marginTop: 8 }}>
-          <summary>Newshosting Server (to SAB)</summary>
-          <div style={{ paddingTop: 12 }}>
-            <label className="check"><input type="checkbox" checked={!!config.newshosting.enabled} onChange={(e) => update('newshosting.enabled', e.target.checked)} /> Enabled</label>
-            <label>Name</label><input value={config.newshosting.name} onChange={(e) => update('newshosting.name', e.target.value)} />
-            <label>Host</label><input value={config.newshosting.host} onChange={(e) => update('newshosting.host', e.target.value)} />
-            <label>Port</label><input value={config.newshosting.port} onChange={(e) => update('newshosting.port', e.target.value)} />
-            <label>Username</label><input value={config.newshosting.username} onChange={(e) => update('newshosting.username', e.target.value)} />
-            <label>Password</label><input type="password" value={config.newshosting.password} onChange={(e) => update('newshosting.password', e.target.value)} />
-            <label className="check"><input type="checkbox" checked={!!config.newshosting.ssl} onChange={(e) => update('newshosting.ssl', e.target.checked)} /> SSL</label>
-            <label className="check"><input type="checkbox" checked={!!config.newshosting.optional} onChange={(e) => update('newshosting.optional', e.target.checked)} /> Optional</label>
-            <label>Connections</label><input value={config.newshosting.connections} onChange={(e) => update('newshosting.connections', e.target.value)} />
-            <label>Retention</label><input value={config.newshosting.retention} onChange={(e) => update('newshosting.retention', e.target.value)} />
-          </div>
-        </details>
-
-        <details className="card" style={{ marginTop: 8 }}>
-          <summary>Sonarr</summary>
-          <div style={{ paddingTop: 12 }}>
-            <label className="check"><input type="checkbox" checked={!!config.sonarr.enabled} onChange={(e) => update('sonarr.enabled', e.target.checked)} /> Enabled</label>
-            <label>URL</label><input value={config.sonarr.url} onChange={(e) => update('sonarr.url', e.target.value)} />
-            <label>Port</label><input value={config.sonarr.port} onChange={(e) => update('sonarr.port', e.target.value)} />
-            <label>API Key ({config.sonarr.apiKey ? 'set' : 'not set'})</label>
-            <div className="row wrap">
-              <input type={showApiKeys.sonarr ? 'text' : 'password'} value={config.sonarr.apiKey} onChange={(e) => update('sonarr.apiKey', e.target.value)} />
-              <button className="secondary" onClick={() => toggleShowApiKey('sonarr')}>{showApiKeys.sonarr ? 'Hide' : 'Show'}</button>
+      {showDeployOutput && (deployState.running || deployState.logs.length || deployState.error) ? (
+        <div className="modal-backdrop" onClick={() => setShowDeployOutput(false)}>
+          <div className="modal" onClick={(e) => e.stopPropagation()}>
+            <div className="modal-header">
+              <div>
+                <h3>Deploy Output</h3>
+                <p className="hint" style={{ marginTop: 6 }}>
+                  {deployState.running
+                    ? 'Deployment in progress...'
+                    : deployState.success === true
+                      ? 'Last deployment completed successfully.'
+                      : deployState.success === false
+                        ? 'Last deployment failed.'
+                        : 'Deployment log.'}
+                </p>
+              </div>
+              <button type="button" className="secondary modal-close" onClick={() => setShowDeployOutput(false)}>✕</button>
             </div>
-            <label>TV Root</label><input value={config.sonarr.tvRoot} onChange={(e) => update('sonarr.tvRoot', e.target.value)} />
-          </div>
-        </details>
-
-        <details className="card" style={{ marginTop: 8 }}>
-          <summary>Radarr</summary>
-          <div style={{ paddingTop: 12 }}>
-            <label className="check"><input type="checkbox" checked={!!config.radarr.enabled} onChange={(e) => update('radarr.enabled', e.target.checked)} /> Enabled</label>
-            <label>URL</label><input value={config.radarr.url} onChange={(e) => update('radarr.url', e.target.value)} />
-            <label>Port</label><input value={config.radarr.port} onChange={(e) => update('radarr.port', e.target.value)} />
-            <label>API Key ({config.radarr.apiKey ? 'set' : 'not set'})</label>
-            <div className="row wrap">
-              <input type={showApiKeys.radarr ? 'text' : 'password'} value={config.radarr.apiKey} onChange={(e) => update('radarr.apiKey', e.target.value)} />
-              <button className="secondary" onClick={() => toggleShowApiKey('radarr')}>{showApiKeys.radarr ? 'Hide' : 'Show'}</button>
+            <div className="modal-body">
+              <pre className="terminal-output">{(deployState.logs || []).join('\n') || 'No deploy output yet.'}</pre>
             </div>
-            <label>Movie Root</label><input value={config.radarr.movieRoot} onChange={(e) => update('radarr.movieRoot', e.target.value)} />
-          </div>
-        </details>
-
-        <details className="card" style={{ marginTop: 8 }}>
-          <summary>SABnzbd</summary>
-          <div style={{ paddingTop: 12 }}>
-            <label className="check"><input type="checkbox" checked={!!config.sabnzbd.enabled} onChange={(e) => update('sabnzbd.enabled', e.target.checked)} /> Enabled</label>
-            <label>URL</label><input value={config.sabnzbd.url} onChange={(e) => update('sabnzbd.url', e.target.value)} />
-            <label>Port</label><input value={config.sabnzbd.port} onChange={(e) => update('sabnzbd.port', e.target.value)} />
-            <label>API Key ({config.sabnzbd.apiKey ? 'set' : 'not set'})</label>
-            <div className="row wrap">
-              <input type={showApiKeys.sabnzbd ? 'text' : 'password'} value={config.sabnzbd.apiKey} onChange={(e) => update('sabnzbd.apiKey', e.target.value)} />
-              <button className="secondary" onClick={() => toggleShowApiKey('sabnzbd')}>{showApiKeys.sabnzbd ? 'Hide' : 'Show'}</button>
-            </div>
-            <label>TV Category</label><input value={config.sabnzbd.tvCategory} onChange={(e) => update('sabnzbd.tvCategory', e.target.value)} />
-            <label>Movie Category</label><input value={config.sabnzbd.movieCategory} onChange={(e) => update('sabnzbd.movieCategory', e.target.value)} />
-          </div>
-        </details>
-
-        <details className="card" style={{ marginTop: 8 }}>
-          <summary>Prowlarr</summary>
-          <div style={{ paddingTop: 12 }}>
-            <label className="check"><input type="checkbox" checked={!!config.prowlarr.enabled} onChange={(e) => update('prowlarr.enabled', e.target.checked)} /> Enabled</label>
-            <label>URL</label><input value={config.prowlarr.url} onChange={(e) => update('prowlarr.url', e.target.value)} />
-            <label>Port</label><input value={config.prowlarr.port} onChange={(e) => update('prowlarr.port', e.target.value)} />
-            <label>API Key ({config.prowlarr.apiKey ? 'set' : 'not set'})</label>
-            <div className="row wrap">
-              <input type={showApiKeys.prowlarr ? 'text' : 'password'} value={config.prowlarr.apiKey} onChange={(e) => update('prowlarr.apiKey', e.target.value)} />
-              <button className="secondary" onClick={() => toggleShowApiKey('prowlarr')}>{showApiKeys.prowlarr ? 'Hide' : 'Show'}</button>
-            </div>
-            <p className="hint" style={{ marginTop: 8 }}>Sonarr/Radarr indexers are managed through Prowlarr only.</p>
-          </div>
-        </details>
-
-        <details className="card" style={{ marginTop: 8 }}>
-          <summary>Jellyfin</summary>
-          <div style={{ paddingTop: 12 }}>
-            <label className="check"><input type="checkbox" checked={!!config.jellyfin.enabled} onChange={(e) => update('jellyfin.enabled', e.target.checked)} /> Enabled</label>
-            <label>URL</label><input value={config.jellyfin.url} onChange={(e) => update('jellyfin.url', e.target.value)} />
-            <label>Port</label><input value={config.jellyfin.port} onChange={(e) => update('jellyfin.port', e.target.value)} />
-            <label>API Key ({config.jellyfin.apiKey ? 'set' : 'not set'})</label>
-            <div className="row wrap">
-              <input type={showApiKeys.jellyfin ? 'text' : 'password'} value={config.jellyfin.apiKey} onChange={(e) => update('jellyfin.apiKey', e.target.value)} />
-              <button className="secondary" onClick={() => toggleShowApiKey('jellyfin')}>{showApiKeys.jellyfin ? 'Hide' : 'Show'}</button>
+            <div className="modal-footer">
+              <button type="button" className="secondary" onClick={() => setShowDeployOutput(false)}>Close</button>
             </div>
           </div>
-        </details>
-
-        <details className="card" style={{ marginTop: 8 }}>
-          <summary>Advanced</summary>
-          <div style={{ paddingTop: 12 }}>
-            <h4>Compose YAML</h4>
-            <textarea className="codebox" value={config.composeYaml || ''} onChange={(e) => update('composeYaml', e.target.value)} />
-          </div>
-        </details>
-
-        <div className="row" style={{ marginTop: 16 }}>
-          <button onClick={saveConfig} disabled={saving}>{saving ? 'Saving...' : 'Save Settings'}</button>
-          <button className="secondary" onClick={applySettings}>Apply to Apps</button>
-          <button className="secondary" onClick={discoverApiKeys}>Auto-Fill API Keys</button>
         </div>
-      </section>
+      ) : null}
+
+      {configModal ? (
+        <div className="modal-backdrop" onClick={() => setConfigModal(null)}>
+          <div className="modal" onClick={(e) => e.stopPropagation()}>
+            <div className="modal-header">
+              <h3>{modalTitles[configModal] || 'Configuration'}</h3>
+              <button type="button" className="secondary modal-close" onClick={() => setConfigModal(null)}>✕</button>
+            </div>
+            <div className="modal-body">
+              {renderConfigModal()}
+            </div>
+            <div className="modal-footer">
+              <button type="button" className="secondary" onClick={() => setConfigModal(null)}>Close</button>
+              <button type="button" className="secondary" onClick={applySettings}>Apply to Apps</button>
+              <button type="button" onClick={saveModalConfig} disabled={saving || serviceYamlLoading}>{saving ? 'Saving...' : 'Save'}</button>
+            </div>
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }

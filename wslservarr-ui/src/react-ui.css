@@ -171,6 +171,22 @@ input, textarea {
 	font-size: 0.82rem;
 }
 
+.terminal-output {
+	margin: 0;
+	min-height: 180px;
+	max-height: 360px;
+	overflow: auto;
+	background: #0b1322;
+	border: 1px solid var(--border);
+	border-radius: 7px;
+	padding: 12px;
+	color: var(--text);
+	font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+	font-size: 0.82rem;
+	white-space: pre-wrap;
+	word-break: break-word;
+}
+
 .hint {
 	margin: 0 0 8px;
 	color: var(--text-dim);

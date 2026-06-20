@@ -9,7 +9,7 @@ param(
     [string]$DataRootPath = "C:\wslservarr",
     [string]$WebUiRepoUrl = "https://github.com/miahnelson/wslservarr.git",
     [string]$WebUiRepoBranch = "main",
-    [string]$LocalSourcePath = "",   # Dev mode: rsync this Windows folder instead of pulling from GitHub
+    [string]$LocalSourcePath = "",   # Dev mode: sync local Windows source with tar stream instead of pulling from GitHub
     [switch]$DevMode,                # Shorthand: sets LocalSourcePath to the script's own directory
     [string]$RootFsDownloadUrl = "https://cloud-images.ubuntu.com/wsl/noble/current/ubuntu-noble-wsl-amd64-wsl.rootfs.tar.gz",
     [switch]$AutoDownloadRootFs = $true,
@@ -73,6 +73,27 @@ function Invoke-WslRoot {
 
     $encoded = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($Script))
     & wsl -d $Distro -u root -- bash -lc "echo $encoded | base64 -d | bash"
+}
+
+function Sync-LocalUiToWsl {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Distro,
+        [Parameter(Mandatory = $true)]
+        [string]$SourceRoot
+    )
+
+    $uiSource = Join-Path $SourceRoot 'wslservarr-ui'
+    if (-not (Test-Path $uiSource)) {
+        throw "Local UI source folder not found: $uiSource"
+    }
+
+    Write-Host "  Syncing UI folder with tar stream: $uiSource" -ForegroundColor DarkGray
+    & wsl -d $Distro -u root -- bash -lc "rm -rf /opt/wslservarr/src/wslservarr-ui && mkdir -p /opt/wslservarr/src"
+    tar -C $SourceRoot -cf - wslservarr-ui | wsl -d $Distro -u root -- bash -lc "tar -xf - -C /opt/wslservarr/src"
+    if ($LASTEXITCODE -ne 0) {
+        throw "tar sync failed with exit code $LASTEXITCODE"
+    }
 }
 
 function Start-RunMode {
@@ -407,21 +428,17 @@ mount | grep -E '/mnt/(config|media|downloads)' || echo "  (mounts may appear on
 
     Write-Host "[8/8] Installing Docker Engine + Compose + minimal WSLServarr UI..."
 
-    # Compute WSL path for local source (used in dev mode)
-    $devModeFlag = if ($LocalSourcePath) { "1" } else { "0" }
-    $localSrcWin  = $LocalSourcePath  # Windows path, passed to drvfs mount
+    $setupUsesLocalUi = if ($LocalSourcePath) { "1" } else { "0" }
 
     $installStack = @"
 set -euo pipefail
 
 export DEBIAN_FRONTEND=noninteractive
 
-# Variables injected from PowerShell
-devMode="$devModeFlag"
-localSrcWin="$localSrcWin"
+setupUsesLocalUi="$setupUsesLocalUi"
 
 apt-get update
-apt-get install -y ca-certificates curl gnupg lsb-release libsecret-1-0 gnome-keyring git rsync
+apt-get install -y ca-certificates curl gnupg lsb-release libsecret-1-0 gnome-keyring git
 
 install -m 0755 -d /etc/apt/keyrings
 curl -fsSL https://download.docker.com/linux/ubuntu/gpg | gpg --dearmor -o /etc/apt/keyrings/docker.gpg
@@ -447,13 +464,9 @@ chown -R ${LinuxUser}:${LinuxUser} /home/${LinuxUser}/.docker
 mkdir -p /opt/wslservarr
 mkdir -p /mnt/config/wslservarr-ui
 
-# Source sync: dev (local rsync) or production (git)
-if [ "$devMode" = "1" ]; then
-    echo "[DEV] Syncing from local Windows source..."
-    mkdir -p /opt/wslservarr/src /mnt/winsrc
-    mountpoint -q /mnt/winsrc || mount -t drvfs "$localSrcWin" /mnt/winsrc
-    rsync -a --delete --exclude='.git' --exclude='node_modules' --exclude='wslservarr-ui/dist' /mnt/winsrc/ /opt/wslservarr/src/
-    umount /mnt/winsrc 2>/dev/null || true
+if [ "$setupUsesLocalUi" = "1" ]; then
+    rm -rf /opt/wslservarr/src
+    mkdir -p /opt/wslservarr/src
 else
     git config --global --add safe.directory /opt/wslservarr/src || true
     if [ -d /opt/wslservarr/src/.git ]; then
@@ -497,6 +510,11 @@ docker compose up -d --build
 systemctl set-default multi-user.target
 "@
     Invoke-Wsl -Distro $DistroName -Script $installStack
+    if ($LocalSourcePath) {
+        Write-Host "[DEV] Syncing local UI source..."
+        Sync-LocalUiToWsl -Distro $DistroName -SourceRoot $LocalSourcePath
+        & wsl -d $DistroName -u root -- bash -lc "cd /opt/wslservarr && docker compose up -d --build wslservarr_ui"
+    }
 
     Write-Host "Completed." -ForegroundColor Green
     Write-Host ""
@@ -551,10 +569,7 @@ elseif ($Action -eq "Update") {
 
     if ($LocalSourcePath) {
         Write-Host "[1/4] Syncing UI sources from local path (dev mode): $LocalSourcePath"
-        $wslDest = "\\wsl$\$DistroName\opt\wslservarr\src"
-        & wsl -d $DistroName -u root -- bash -lc "mkdir -p /opt/wslservarr/src"
-        robocopy $LocalSourcePath $wslDest /MIR /XD .git node_modules dist /NFL /NDL /NJH /NJS | Out-Null
-        if ($LASTEXITCODE -ge 8) { throw "robocopy failed with exit code $LASTEXITCODE" }
+        Sync-LocalUiToWsl -Distro $DistroName -SourceRoot $LocalSourcePath
         Write-Host "  Sync complete."
     } else {
         Write-Host "[1/4] Syncing UI sources from GitHub..."
