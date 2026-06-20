@@ -688,6 +688,23 @@ async function autoConfigureProwlarrApplications(cfg, onProgress) {
     if (onProgress) onProgress(`Auto-configuring Prowlarr application for ${app}...`);
     await retryAsync(() => upsertProwlarrApplication(app, cfg), 8, 2500);
   }
+
+  await retryAsync(() => triggerProwlarrAppIndexerSync(cfg, onProgress, true), 8, 2500);
+}
+
+async function triggerProwlarrAppIndexerSync(cfg, onProgress, forceSync = true) {
+  if (!cfg?.prowlarr?.enabled || !cfg?.prowlarr?.apiKey) return;
+
+  if (onProgress) onProgress('Triggering Prowlarr app indexer sync...');
+  const client = apiClient(cfg.prowlarr.url, cfg.prowlarr.apiKey);
+  const res = await client.post('/api/v1/command', {
+    name: 'ApplicationIndexerSync',
+    forceSync: !!forceSync
+  });
+
+  if (res?.data?.id && onProgress) {
+    onProgress(`Queued Prowlarr app indexer sync command #${res.data.id}.`);
+  }
 }
 
 async function ensureRootFolder(appName, cfg) {
@@ -1367,6 +1384,10 @@ app.post('/api/apply', async (req, res) => {
       await ensureRootFolder('radarr', cfg);
       if (canProwlarr) await upsertProwlarrApplication('radarr', cfg);
       if (canSab) await upsertArrDownloadClient('radarr', cfg);
+    }
+
+    if (canProwlarr) {
+      await triggerProwlarrAppIndexerSync(cfg, pushDeployLog, true);
     }
 
     res.json({ ok: true, message: 'Applied settings to detected apps (SAB + Arr + Prowlarr)' });
