@@ -166,51 +166,6 @@ function ensureDiagnosticsDir() {
   }
 }
 
-function readXmlTagValue(filePath, tagName) {
-  if (!fs.existsSync(filePath)) return '';
-  const text = fs.readFileSync(filePath, 'utf8');
-  const re = new RegExp(`<${tagName}>([^<]+)</${tagName}>`, 'i');
-  const m = text.match(re);
-  return m?.[1]?.trim() || '';
-}
-
-function readIniKeyValue(filePath, keyName) {
-  if (!fs.existsSync(filePath)) return '';
-  const text = fs.readFileSync(filePath, 'utf8');
-  const re = new RegExp(`^\\s*${keyName}\\s*=\\s*(.+)\\s*$`, 'im');
-  const m = text.match(re);
-  return m?.[1]?.trim() || '';
-}
-
-function discoverApiKeysFromMountedConfig() {
-  const found = {};
-
-  const sonarrKey = readXmlTagValue('/mnt/config/sonarr/config.xml', 'ApiKey');
-  if (sonarrKey) found.sonarr = sonarrKey;
-
-  const radarrKey = readXmlTagValue('/mnt/config/radarr/config.xml', 'ApiKey');
-  if (radarrKey) found.radarr = radarrKey;
-
-  const sabKey = readIniKeyValue('/mnt/config/sabnzbd/sabnzbd.ini', 'api_key');
-    if (sabKey) found.sabnzbd = sabKey;
-
-  const prowlarrKey = readXmlTagValue('/mnt/config/prowlarr/config.xml', 'ApiKey');
-  if (prowlarrKey) found.prowlarr = prowlarrKey;
-
-  return found;
-}
-
-function mergeDiscoveredApiKeys(cfg, found = discoverApiKeysFromMountedConfig()) {
-  const next = normalizeConfig(cfg);
-
-  if (found.sonarr && !next.sonarr.apiKey) next.sonarr.apiKey = found.sonarr;
-  if (found.radarr && !next.radarr.apiKey) next.radarr.apiKey = found.radarr;
-  if (found.sabnzbd && !next.sabnzbd.apiKey) next.sabnzbd.apiKey = found.sabnzbd;
-  if (found.prowlarr && !next.prowlarr.apiKey) next.prowlarr.apiKey = found.prowlarr;
-
-  return next;
-}
-
 async function execForDiagnostics(command, args) {
   try {
     const { stdout, stderr } = await execFileAsync(command, args, { maxBuffer: 1024 * 1024 * 10 });
@@ -314,18 +269,6 @@ function ensureConfig() {
         apiKey: '',
         port: 8096
       },
-      newshosting: {
-        enabled: false,
-        name: 'newshosting',
-        host: 'news.newshosting.com',
-        port: 563,
-        username: '',
-        password: '',
-        ssl: true,
-        connections: 40,
-        retention: 0,
-        optional: false
-      },
       paths: { 
         mediaRoot: '/mnt/media',
         downloadsRoot: '/mnt/downloads'
@@ -362,14 +305,11 @@ function writeConfig(config) {
 function readEffectiveConfig({ persist = false } = {}) {
   const raw = readConfig();
   const normalizedRaw = normalizeConfig(raw);
-  const merged = mergeDiscoveredApiKeys(raw);
-  const normalizedMerged = normalizeConfig(merged);
-
-  if (persist && JSON.stringify(normalizedRaw) !== JSON.stringify(normalizedMerged)) {
-    writeConfig(normalizedMerged);
+  if (persist && JSON.stringify(raw) !== JSON.stringify(normalizedRaw)) {
+    writeConfig(normalizedRaw);
   }
 
-  return normalizedMerged;
+  return normalizedRaw;
 }
 
 function apiClient(baseUrl, apiKey) {
@@ -590,47 +530,6 @@ async function upsertProwlarrDownloadClient(cfg) {
     await client.put(`/api/v1/downloadclient/${existing.id}`, payload);
   } else {
     await client.post('/api/v1/downloadclient', payload);
-  }
-}
-
-async function upsertSabNewshostingServer(cfg) {
-  if (!cfg?.sabnzbd?.enabled || !cfg?.sabnzbd?.apiKey) return;
-  if (!cfg?.newshosting?.enabled) return;
-
-  const ns = cfg.newshosting;
-  const sabUrl = getInternalServiceUrl(cfg, 'sabnzbd').replace(/\/$/, '');
-  if (!sabUrl) throw new Error('SABnzbd URL is missing');
-  if (!ns.host || !ns.username || !ns.password) {
-    throw new Error('Newshosting requires host, username, and password');
-  }
-
-  const params = {
-    mode: 'addserver',
-    output: 'json',
-    apikey: cfg.sabnzbd.apiKey,
-    name: ns.name || 'newshosting',
-    host: ns.host,
-    port: Number(ns.port || 563),
-    username: ns.username,
-    password: ns.password,
-    ssl: ns.ssl ? 1 : 0,
-    connections: Number(ns.connections || 40),
-    retention: Number(ns.retention || 0),
-    optional: ns.optional ? 1 : 0,
-    enable: 1
-  };
-
-  const res = await axios.get(`${sabUrl}/api`, { params, timeout: 10000 });
-  const body = res.data;
-  const text = typeof body === 'string' ? body.toLowerCase() : JSON.stringify(body || {}).toLowerCase();
-
-  const ok = (body && (body.status === true || body.status === 'ok' || body.result === true))
-    || text.includes('ok')
-    || text.includes('already exists')
-    || text.includes('duplicate');
-
-  if (!ok) {
-    throw new Error(`Failed to seed Newshosting in SABnzbd: ${typeof body === 'string' ? body : JSON.stringify(body)}`);
   }
 }
 
@@ -892,15 +791,6 @@ async function applyIntegrationsWithProgress(cfg, appName = null, onProgress) {
     ? [appName]
     : ['sonarr', 'radarr'];
 
-  if (cfg.newshosting?.enabled) {
-    if (onProgress) onProgress('Applying Newshosting server to SABnzbd...');
-    try {
-      await retryAsync(() => upsertSabNewshostingServer(cfg), 8, 2500);
-    } catch (e) {
-      if (onProgress) onProgress(`Warning: SAB Newshosting auto-config skipped: ${e.message}`);
-    }
-  }
-
   for (const app of appTargets) {
     const arrCfg = cfg[app];
     if (!arrCfg?.enabled || !arrCfg?.apiKey) {
@@ -993,10 +883,6 @@ async function relinkAppsWithProgress(appName = null, onProgress) {
 
   if (cfg?.prowlarr?.enabled && cfg?.prowlarr?.apiKey) {
     await waitForAppReady('prowlarr', cfg, onProgress);
-  }
-
-  if (cfg?.sabnzbd?.enabled && cfg?.sabnzbd?.apiKey && cfg?.newshosting?.enabled) {
-    await waitForAppReady('sabnzbd', cfg, onProgress);
   }
 
   if (cfg?.sabnzbd?.enabled && cfg?.sabnzbd?.apiKey) {
@@ -1127,23 +1013,12 @@ async function syncEnabledAppsFromContainers(cfg) {
 
 function normalizeConfig(config) {
   const next = { ...config };
+  delete next.newshosting;
   next.sonarr = next.sonarr || { enabled: false, url: 'http://sonarr:8989', apiKey: '', port: '8989', tvRoot: '/media/tv' };
   next.radarr = next.radarr || { enabled: false, url: 'http://radarr:7878', apiKey: '', port: '7878', movieRoot: '/media/movies' };
   next.sabnzbd = next.sabnzbd || { enabled: false, url: 'http://sabnzbd:8080', apiKey: '', port: '8080', tvCategory: 'tv', movieCategory: 'movies' };
   next.prowlarr = next.prowlarr || { enabled: false, url: 'http://prowlarr:9696', apiKey: '', port: '9696' };
   next.jellyfin = next.jellyfin || { enabled: false, url: 'http://jellyfin:8096', apiKey: '', port: '8096' };
-  next.newshosting = next.newshosting || {
-    enabled: false,
-    name: 'newshosting',
-    host: 'news.newshosting.com',
-    port: 563,
-    username: '',
-    password: '',
-    ssl: true,
-    connections: 40,
-    retention: 0,
-    optional: false
-  };
   if (next.indexers && !Array.isArray(next.indexers)) next.indexers = [];
   next.paths = next.paths || { mediaRoot: '/mnt/media', downloadsRoot: '/mnt/downloads' };
   if (typeof next.sonarr.tvRoot === 'string' && next.sonarr.tvRoot.startsWith('/mnt/media')) {
@@ -1234,18 +1109,6 @@ function buildConfigFromBody(body) {
       port: body.jellyfinPort || '8096',
       composeYaml: typeof body.jellyfinComposeYaml === 'string' ? body.jellyfinComposeYaml : (prev.jellyfin.composeYaml || '')
     },
-    newshosting: {
-      enabled: body.newshostingEnabled === 'on' || body.newshostingEnabled === true,
-      name: body.newshostingName || prev.newshosting.name || 'newshosting',
-      host: body.newshostingHost || prev.newshosting.host || 'news.newshosting.com',
-      port: body.newshostingPort || prev.newshosting.port || 563,
-      username: body.newshostingUsername || prev.newshosting.username || '',
-      password: body.newshostingPassword || prev.newshosting.password || '',
-      ssl: body.newshostingSsl === true || body.newshostingSsl === 'on',
-      connections: body.newshostingConnections || prev.newshosting.connections || 40,
-      retention: body.newshostingRetention || prev.newshosting.retention || 0,
-      optional: body.newshostingOptional === true || body.newshostingOptional === 'on'
-    },
     indexers: Array.isArray(prev.indexers) ? prev.indexers : [],
     paths: {
       mediaRoot: body.mediaRoot || '/mnt/media',
@@ -1265,7 +1128,7 @@ function buildConfigFromBody(body) {
 }
 
 async function getDashboardData() {
-  const config = mergeDiscoveredApiKeys(readConfig());
+  const config = readEffectiveConfig({ persist: true });
   let containers = [];
   try {
     containers = await getContainerStatuses();
@@ -1747,25 +1610,6 @@ app.post('/api/config', (req, res) => {
     res.json({ ok: true, config: next });
   } catch (e) {
     res.status(400).json({ ok: false, error: e.message });
-  }
-});
-
-app.post('/api/discover-keys', (req, res) => {
-  try {
-    const found = discoverApiKeysFromMountedConfig();
-
-    const cfg = mergeDiscoveredApiKeys(readConfig(), found);
-
-    writeConfig(cfg);
-
-    const discoveredApps = Object.keys(found);
-    const message = discoveredApps.length
-      ? `Discovered API keys for: ${discoveredApps.join(', ')}`
-      : 'No API keys discovered from mounted app configs.';
-
-    res.json({ ok: true, found, config: cfg, message });
-  } catch (e) {
-    res.status(500).json({ ok: false, error: e.message });
   }
 });
 

@@ -38,18 +38,6 @@
     "port": 8096,
     "composeYaml": ""
   },
-  "newshosting": {
-    "enabled": false,
-    "name": "newshosting",
-    "host": "news.newshosting.com",
-    "port": 563,
-    "username": "",
-    "password": "",
-    "ssl": true,
-    "connections": 40,
-    "retention": 0,
-    "optional": false
-  },
   "paths": {
     "mediaRoot": "/mnt/media",
     "downloadsRoot": "/mnt/downloads",

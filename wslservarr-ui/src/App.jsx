@@ -7,7 +7,6 @@ const defaultConfig = {
   sabnzbd: { enabled: false, url: 'http://sabnzbd:8080', apiKey: '', port: '8080', tvCategory: 'tv', movieCategory: 'movies', composeYaml: '' },
   prowlarr: { enabled: false, url: 'http://prowlarr:9696', apiKey: '', port: '9696', composeYaml: '' },
   jellyfin: { enabled: false, url: 'http://jellyfin:8096', apiKey: '', port: '8096', composeYaml: '' },
-  newshosting: { enabled: false, name: 'newshosting', host: 'news.newshosting.com', port: 563, username: '', password: '', ssl: true, connections: 40, retention: 0, optional: false },
   paths: { mediaRoot: '/mnt/media', downloadsRoot: '/mnt/downloads', configRoot: '/mnt/config' },
   runtime: { timezone: 'America/New_York', puid: '1000', pgid: '1000' },
   composeYaml: ''
@@ -23,10 +22,61 @@ function mergeConfig(input) {
     sabnzbd: { ...defaultConfig.sabnzbd, ...(cfg.sabnzbd || {}) },
     prowlarr: { ...defaultConfig.prowlarr, ...(cfg.prowlarr || {}) },
     jellyfin: { ...defaultConfig.jellyfin, ...(cfg.jellyfin || {}) },
-    newshosting: { ...defaultConfig.newshosting, ...(cfg.newshosting || {}) },
     paths: { ...defaultConfig.paths, ...(cfg.paths || {}) },
     runtime: { ...defaultConfig.runtime, ...(cfg.runtime || {}) }
   };
+}
+
+function isLoopbackHost(hostname) {
+  const host = String(hostname || '').trim().toLowerCase();
+  return !host || host === 'localhost' || host === '127.0.0.1' || host === '::1';
+}
+
+async function discoverLanIpv4() {
+  if (typeof window === 'undefined') return '';
+  const RTCPeerConnectionCtor = window.RTCPeerConnection || window.webkitRTCPeerConnection || window.mozRTCPeerConnection;
+  if (!RTCPeerConnectionCtor) return '';
+
+  return new Promise((resolve) => {
+    const timer = setTimeout(() => {
+      try { pc.close(); } catch {}
+      resolve('');
+    }, 2500);
+
+    const found = new Set();
+    const pc = new RTCPeerConnectionCtor({ iceServers: [] });
+
+    const finish = (value) => {
+      clearTimeout(timer);
+      try { pc.close(); } catch {}
+      resolve(value || '');
+    };
+
+    const handleCandidateText = (text) => {
+      const matches = String(text || '').match(/\b(?:\d{1,3}\.){3}\d{1,3}\b/g) || [];
+      for (const ip of matches) {
+        if (isLoopbackHost(ip)) continue;
+        if (ip.startsWith('172.18.') || ip.startsWith('172.19.') || ip.startsWith('172.20.') || ip.startsWith('172.21.') || ip.startsWith('172.22.') || ip.startsWith('172.23.') || ip.startsWith('172.24.') || ip.startsWith('172.25.') || ip.startsWith('172.26.') || ip.startsWith('172.27.') || ip.startsWith('172.28.') || ip.startsWith('172.29.') || ip.startsWith('172.30.') || ip.startsWith('172.31.')) {
+          continue;
+        }
+        found.add(ip);
+      }
+
+      const preferred = Array.from(found).find((ip) => ip.startsWith('192.168.') || ip.startsWith('10.')) || Array.from(found)[0] || '';
+      if (preferred) finish(preferred);
+    };
+
+    pc.onicecandidate = (event) => {
+      if (event?.candidate?.candidate) {
+        handleCandidateText(event.candidate.candidate);
+      }
+    };
+
+    pc.createDataChannel('wslservarr');
+    pc.createOffer()
+      .then((offer) => pc.setLocalDescription(offer))
+      .catch(() => finish(''));
+  });
 }
 
 function App() {
@@ -34,15 +84,18 @@ function App() {
   const [loading, setLoading] = useState(true);
   const [config, setConfig] = useState(defaultConfig);
   const [containers, setContainers] = useState([]);
+  const [networkHost, setNetworkHost] = useState('');
   const [message, setMessage] = useState('');
   const [error, setError] = useState('');
   const [saving, setSaving] = useState(false);
   const [showApiKeys, setShowApiKeys] = useState({ sonarr: false, radarr: false, sabnzbd: false, prowlarr: false, jellyfin: false });
   const [configModal, setConfigModal] = useState(null);
+  const [actionsMenuOpen, setActionsMenuOpen] = useState(false);
   const [serviceYamlDraft, setServiceYamlDraft] = useState('');
   const [serviceYamlLoading, setServiceYamlLoading] = useState(false);
   const [deployState, setDeployState] = useState({ running: false, startedAt: null, finishedAt: null, success: null, error: '', logs: [] });
   const [showDeployOutput, setShowDeployOutput] = useState(false);
+  const actionsMenuRef = useRef(null);
   const deployStreamInitialized = useRef(false);
   const lastDeployStartedAt = useRef(null);
 
@@ -91,6 +144,40 @@ function App() {
     }
     link.setAttribute('href', appIcon);
   }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    const detectNetworkHost = async () => {
+      if (typeof window === 'undefined') return;
+      const currentHost = window.location.hostname;
+      if (!isLoopbackHost(currentHost)) {
+        if (!cancelled) setNetworkHost(currentHost);
+        return;
+      }
+
+      const detected = await discoverLanIpv4();
+      if (!cancelled) setNetworkHost(detected || '');
+    };
+
+    detectNetworkHost();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!actionsMenuOpen) return undefined;
+
+    const handlePointerDown = (event) => {
+      if (!actionsMenuRef.current?.contains(event.target)) {
+        setActionsMenuOpen(false);
+      }
+    };
+
+    document.addEventListener('mousedown', handlePointerDown);
+    return () => document.removeEventListener('mousedown', handlePointerDown);
+  }, [actionsMenuOpen]);
 
   useEffect(() => {
     let cancelled = false;
@@ -221,6 +308,54 @@ function App() {
     return '';
   }
 
+  function getNetworkAppUrl(appName) {
+    const host = String(networkHost || '').trim();
+    if (!host || isLoopbackHost(host)) return '';
+    if (appName === 'sonarr') return `http://${host}:${config?.sonarr?.port || 8989}`;
+    if (appName === 'radarr') return `http://${host}:${config?.radarr?.port || 7878}`;
+    if (appName === 'sabnzbd') return `http://${host}:${config?.sabnzbd?.port || 8080}`;
+    if (appName === 'prowlarr') return `http://${host}:${config?.prowlarr?.port || 9696}`;
+    if (appName === 'jellyfin') return `http://${host}:${config?.jellyfin?.port || 8096}`;
+    return '';
+  }
+
+  function getJellyfinSetupUrl(baseUrl) {
+    const base = String(baseUrl || '').trim().replace(/\/+$/, '');
+    if (!base) return '';
+    return `${base}/web/index.html#!/wizardstart`;
+  }
+
+  function renderAppUrls(appName) {
+    const localhostUrl = getAppUrl(appName);
+    const lanUrl = getNetworkAppUrl(appName);
+    const entries = [localhostUrl];
+
+    if (appName === 'jellyfin') {
+      entries.push(getJellyfinSetupUrl(localhostUrl));
+    }
+
+    if (lanUrl && lanUrl !== localhostUrl) {
+      entries.push(lanUrl);
+      if (appName === 'jellyfin') {
+        entries.push(getJellyfinSetupUrl(lanUrl));
+      }
+    }
+
+    const uniqueEntries = entries.filter(Boolean).filter((href, index, list) => list.indexOf(href) === index);
+
+    if (!uniqueEntries.length) return '-';
+
+    return (
+      <div className="url-stack">
+        {uniqueEntries.map((href) => (
+          <a key={href} href={href} target="_blank" rel="noreferrer">
+            <span>{href}</span>
+          </a>
+        ))}
+      </div>
+    );
+  }
+
   function getContainerInfo(appName) {
     return containers.find((c) => c.name === appName) || null;
   }
@@ -258,16 +393,6 @@ function App() {
       jellyfinUrl: config.jellyfin.url,
       jellyfinApiKey: config.jellyfin.apiKey,
       jellyfinPort: config.jellyfin.port,
-      newshostingEnabled: config.newshosting.enabled,
-      newshostingName: config.newshosting.name,
-      newshostingHost: config.newshosting.host,
-      newshostingPort: config.newshosting.port,
-      newshostingUsername: config.newshosting.username,
-      newshostingPassword: config.newshosting.password,
-      newshostingSsl: config.newshosting.ssl,
-      newshostingConnections: config.newshosting.connections,
-      newshostingRetention: config.newshosting.retention,
-      newshostingOptional: config.newshosting.optional,
       mediaRoot: config.paths.mediaRoot,
       downloadsRoot: config.paths.downloadsRoot,
       configRoot: config.paths.configRoot,
@@ -352,20 +477,6 @@ function App() {
     setMessage(`${data.message || 'Relinked deployed apps.'}${warningText}`);
   }
 
-  async function discoverApiKeys() {
-    setMessage('');
-    setError('');
-    const res = await fetch('/api/discover-keys', { method: 'POST' });
-    const data = await res.json();
-    if (!res.ok || !data.ok) {
-      setError(data.error || 'API key discovery failed');
-      return;
-    }
-    const next = mergeConfig(data.config || config);
-    setConfig(next);
-    setMessage(data.message || 'API key discovery completed.');
-  }
-
   async function containerAction(appName, action) {
     setMessage('');
     setError('');
@@ -426,7 +537,6 @@ function App() {
 
   const modalTitles = {
     paths: 'Paths & Runtime',
-    newshosting: 'Newshosting Server',
     sonarr: 'Sonarr',
     radarr: 'Radarr',
     sabnzbd: 'SABnzbd',
@@ -447,23 +557,6 @@ function App() {
           <label>Timezone</label><input value={config.runtime.timezone} onChange={(e) => update('runtime.timezone', e.target.value)} />
           <label>PUID</label><input value={config.runtime.puid} onChange={(e) => update('runtime.puid', e.target.value)} />
           <label>PGID</label><input value={config.runtime.pgid} onChange={(e) => update('runtime.pgid', e.target.value)} />
-        </>
-      );
-    }
-
-    if (app === 'newshosting') {
-      return (
-        <>
-          <label className="check"><input type="checkbox" checked={!!config.newshosting.enabled} onChange={(e) => update('newshosting.enabled', e.target.checked)} /> Enabled</label>
-          <label>Name</label><input value={config.newshosting.name} onChange={(e) => update('newshosting.name', e.target.value)} />
-          <label>Host</label><input value={config.newshosting.host} onChange={(e) => update('newshosting.host', e.target.value)} />
-          <label>Port</label><input value={config.newshosting.port} onChange={(e) => update('newshosting.port', e.target.value)} />
-          <label>Username</label><input value={config.newshosting.username} onChange={(e) => update('newshosting.username', e.target.value)} />
-          <label>Password</label><input type="password" value={config.newshosting.password} onChange={(e) => update('newshosting.password', e.target.value)} />
-          <label className="check"><input type="checkbox" checked={!!config.newshosting.ssl} onChange={(e) => update('newshosting.ssl', e.target.checked)} /> SSL</label>
-          <label className="check"><input type="checkbox" checked={!!config.newshosting.optional} onChange={(e) => update('newshosting.optional', e.target.checked)} /> Optional</label>
-          <label>Connections</label><input value={config.newshosting.connections} onChange={(e) => update('newshosting.connections', e.target.value)} />
-          <label>Retention</label><input value={config.newshosting.retention} onChange={(e) => update('newshosting.retention', e.target.value)} />
         </>
       );
     }
@@ -533,13 +626,25 @@ function App() {
       <section className="card">
         <div className="row wrap runtime-toolbar" style={{ justifyContent: 'space-between', marginBottom: 12 }}>
           <h2 style={{ margin: 0 }}>Runtime</h2>
-          <div className="row wrap">
-            <button className="secondary" type="button" onClick={() => setConfigModal('paths')}>Paths & Runtime</button>
-            <button className="secondary" type="button" onClick={() => setConfigModal('newshosting')}>Newshosting</button>
-            <button className="secondary" type="button" onClick={discoverApiKeys}>Auto-Fill API Keys</button>
-            <button className="secondary" type="button" onClick={applySettings}>Relink Deployed Apps</button>
-            <button className="secondary" type="button" onClick={restartAll}>Restart All</button>
-            <button type="button" onClick={saveConfig} disabled={saving}>{saving ? 'Saving...' : 'Save All'}</button>
+          <div className="toolbar-menu" ref={actionsMenuRef}>
+            <button
+              className="secondary icon-button"
+              type="button"
+              aria-label="Open actions menu"
+              aria-haspopup="menu"
+              aria-expanded={actionsMenuOpen}
+              onClick={() => setActionsMenuOpen((prev) => !prev)}
+            >
+              ⚙
+            </button>
+            {actionsMenuOpen ? (
+              <div className="menu-dropdown" role="menu">
+                <button type="button" className="menu-item" onClick={() => { setActionsMenuOpen(false); setConfigModal('paths'); }}>Paths & Runtime</button>
+                <button type="button" className="menu-item" onClick={() => { setActionsMenuOpen(false); applySettings(); }}>Relink Deployed Apps</button>
+                <button type="button" className="menu-item" onClick={() => { setActionsMenuOpen(false); restartAll(); }}>Restart All</button>
+                <button type="button" className="menu-item" onClick={() => { setActionsMenuOpen(false); saveConfig(); }} disabled={saving}>{saving ? 'Saving...' : 'Save All'}</button>
+              </div>
+            ) : null}
           </div>
         </div>
         <table>
@@ -551,7 +656,7 @@ function App() {
               <tr key={c.name}>
                 <td>{c.name}</td>
                 <td><span className={statusClass(c.status)}>{c.status}</span></td>
-                <td>{getAppUrl(c.name) ? <a href={getAppUrl(c.name)} target="_blank" rel="noreferrer">{getAppUrl(c.name)}</a> : '-'}</td>
+                <td>{renderAppUrls(c.name)}</td>
                 <td>
                   <div className="row wrap">
                     <button type="button" className="secondary" onClick={() => containerAction(c.name, c.status === 'running' ? 'stop' : 'start')}>
