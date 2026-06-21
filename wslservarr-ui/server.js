@@ -1562,7 +1562,7 @@ function buildAppsCompose(cfg) {
       - PGID=${pgid}
       - TZ=${tz}
     volumes:
-      - /mnt/config/jellyfin:/config
+      - /opt/wslservarr/config/jellyfin:/config
       - ${mediaRoot}:/media
     ports:
       - "0.0.0.0:${cfg.jellyfin.port}:8096"
@@ -1818,8 +1818,6 @@ async function runInitialSetupWithProgress(config, onProgress) {
     onProgress('All apps are already deployed and running.');
   }
 
-  await autoConfigureJellyfinFirstStart(cfg, onProgress);
-
   if (onProgress) onProgress('Applying first-start integration and relink steps...');
   await relinkAppsWithProgress(null, onProgress);
 
@@ -1829,89 +1827,6 @@ async function runInitialSetupWithProgress(config, onProgress) {
   writeConfig(next);
 
   if (onProgress) onProgress('First-start setup completed.');
-}
-
-async function autoConfigureJellyfinFirstStart(cfg, onProgress) {
-  if (!cfg?.jellyfin?.enabled) return;
-
-  const jellyfinUrl = getInternalServiceUrl(cfg, 'jellyfin');
-  if (!jellyfinUrl) return;
-
-  if (onProgress) onProgress('Checking Jellyfin startup state...');
-
-  const publicInfo = await retryAsync(() => getJellyfinPublicSystemInfo(jellyfinUrl, cfg.jellyfin.apiKey), 24, 2500);
-  if (publicInfo?.StartupWizardCompleted) {
-    if (onProgress) onProgress('Jellyfin startup wizard is already complete.');
-    return;
-  }
-
-  if (onProgress) onProgress('Auto-configuring Jellyfin startup wizard...');
-
-  let defaultUserName = '';
-  try {
-    const userRes = await axios.get(`${jellyfinUrl.replace(/\/$/, '')}/Startup/User`, { timeout: 10000 });
-    defaultUserName = String(userRes?.data?.Name || '').trim();
-  } catch {
-    // Continue; configuration and completion can still proceed.
-  }
-
-  await axios.post(
-    `${jellyfinUrl.replace(/\/$/, '')}/Startup/Configuration`,
-    {
-      ServerName: 'WSLServarr Jellyfin',
-      UICulture: 'en-US',
-      MetadataCountryCode: 'US',
-      PreferredMetadataLanguage: 'en'
-    },
-    {
-      timeout: 10000,
-      headers: { 'Content-Type': 'application/json' }
-    }
-  );
-
-  const desiredUserName = String(cfg?.jellyfin?.setupUsername || '').trim() || defaultUserName || 'admin';
-  const desiredPassword = String(cfg?.jellyfin?.setupPassword || '');
-
-  if (desiredPassword) {
-    await axios.post(
-      `${jellyfinUrl.replace(/\/$/, '')}/Startup/User`,
-      {
-        Name: desiredUserName,
-        Password: desiredPassword
-      },
-      {
-        timeout: 10000,
-        headers: { 'Content-Type': 'application/json' }
-      }
-    );
-
-    if (onProgress) onProgress(`Configured Jellyfin admin user: ${desiredUserName}`);
-  } else if (onProgress) {
-    onProgress('Jellyfin setup username/password not set; leaving default Jellyfin user unchanged.');
-  }
-
-  await axios.post(
-    `${jellyfinUrl.replace(/\/$/, '')}/Startup/Complete`,
-    {},
-    {
-      timeout: 10000,
-      headers: { 'Content-Type': 'application/json' }
-    }
-  );
-
-  await retryAsync(async () => {
-    const info = await getJellyfinPublicSystemInfo(jellyfinUrl, cfg.jellyfin.apiKey);
-    if (!info?.StartupWizardCompleted) {
-      throw new Error('Jellyfin startup wizard is not complete yet');
-    }
-    return info;
-  }, 12, 2000);
-
-  if (onProgress) {
-    onProgress(defaultUserName
-      ? `Jellyfin startup completed. Default user available: ${defaultUserName}`
-      : 'Jellyfin startup completed.');
-  }
 }
 
 async function restartAppsWithProgress(config, appName = null, onProgress) {

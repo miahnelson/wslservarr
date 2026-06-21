@@ -542,8 +542,6 @@ function App() {
       jellyfinUrl: config.jellyfin.url,
       jellyfinApiKey: config.jellyfin.apiKey,
       jellyfinPort: config.jellyfin.port,
-      jellyfinSetupUsername: config.jellyfin.setupUsername,
-      jellyfinSetupPassword: config.jellyfin.setupPassword,
       mediaRoot: config.paths.mediaRoot,
       downloadsRoot: config.paths.downloadsRoot,
       configRoot: config.paths.configRoot,
@@ -832,11 +830,7 @@ function App() {
           <label>TV Category</label><input value={appConfig.tvCategory || ''} onChange={(e) => update('sabnzbd.tvCategory', e.target.value)} />
           <label>Movie Category</label><input value={appConfig.movieCategory || ''} onChange={(e) => update('sabnzbd.movieCategory', e.target.value)} />
         </> : null}
-        {app === 'jellyfin' ? <>
-          <label>Initial Admin Username</label><input value={appConfig.setupUsername || ''} onChange={(e) => update('jellyfin.setupUsername', e.target.value)} />
-          <label>Initial Admin Password</label><input type="password" value={appConfig.setupPassword || ''} onChange={(e) => update('jellyfin.setupPassword', e.target.value)} />
-          <p className="hint" style={{ marginTop: 8 }}>Used only during Jellyfin first-start setup before the Jellyfin startup wizard is completed.</p>
-        </> : null}
+        {app === 'jellyfin' ? <p className="hint" style={{ marginTop: 8 }}>Jellyfin startup wizard is manual. Open Jellyfin and complete server setup there.</p> : null}
         {app === 'prowlarr' ? <p className="hint" style={{ marginTop: 8 }}>Sonarr/Radarr indexers are managed through Prowlarr only.</p> : null}
         <p className="hint" style={{ marginTop: 8 }}>This app deploys from its own YAML only. Changes here affect this app when you click Start (if missing), Deploy, or RestartAll.</p>
 
