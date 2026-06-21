@@ -1,6 +1,6 @@
 ﻿[CmdletBinding(SupportsShouldProcess = $true)]
 param(
-    [ValidateSet("Run", "Setup", "Uninstall", "Update", "Reinstall", "RestartAll")]
+    [ValidateSet("Run", "Setup", "Uninstall", "Update", "Reinstall", "RestartAll", "Startup")]
     [string]$Action,
 
     # Setup parameters
@@ -28,6 +28,7 @@ param(
 
 $ErrorActionPreference = "Stop"
 $InstallSettingsPath = Join-Path $PSScriptRoot ".wslservarr-install.json"
+$StartupTaskName = "WSLServarr Startup"
 
 # Resolve dev source path
 if ($DevMode -and -not $LocalSourcePath) {
@@ -84,6 +85,91 @@ function Save-InstallSettings {
     }
 
     $payload | ConvertTo-Json | Set-Content -LiteralPath $InstallSettingsPath -Encoding UTF8
+}
+
+function Test-WslServarrStartupTaskRegistered {
+    $task = Get-ScheduledTask -TaskName $StartupTaskName -ErrorAction SilentlyContinue
+    return ($null -ne $task)
+}
+
+function Register-WslServarrStartupTask {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$ScriptPath,
+        [Parameter(Mandatory = $true)]
+        [string]$Distro
+    )
+
+    if (-not (Get-Command Register-ScheduledTask -ErrorAction SilentlyContinue)) {
+        throw "Scheduled Tasks cmdlets are not available on this system."
+    }
+
+    $resolvedScriptPath = [System.IO.Path]::GetFullPath($ScriptPath)
+    $powershellExe = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
+    $actionArgs = '-NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -WindowStyle Hidden -File "{0}" -Action Run -DistroName "{1}"' -f $resolvedScriptPath, $Distro
+
+    $taskAction = New-ScheduledTaskAction -Execute $powershellExe -Argument $actionArgs
+    $taskTrigger = New-ScheduledTaskTrigger -AtStartup
+    $taskPrincipal = New-ScheduledTaskPrincipal -UserId 'SYSTEM' -LogonType ServiceAccount -RunLevel Highest
+    $taskSettings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable
+    $taskSettings.MultipleInstances = 'IgnoreNew'
+
+    $existingTask = Get-ScheduledTask -TaskName $StartupTaskName -ErrorAction SilentlyContinue
+    if ($existingTask) {
+        Unregister-ScheduledTask -TaskName $StartupTaskName -Confirm:$false | Out-Null
+    }
+
+    Register-ScheduledTask -TaskName $StartupTaskName -Action $taskAction -Trigger $taskTrigger -Principal $taskPrincipal -Settings $taskSettings -Description 'Starts WSLServarr automatically when Windows boots.' | Out-Null
+    Write-Host "[Startup] Registered Windows startup task '$StartupTaskName'." -ForegroundColor DarkGray
+}
+
+function Unregister-WslServarrStartupTask {
+    $existingTask = Get-ScheduledTask -TaskName $StartupTaskName -ErrorAction SilentlyContinue
+    if (-not $existingTask) {
+        return
+    }
+
+    Unregister-ScheduledTask -TaskName $StartupTaskName -Confirm:$false | Out-Null
+    Write-Host "[Startup] Removed Windows startup task '$StartupTaskName'." -ForegroundColor DarkGray
+}
+
+function Set-WslServarrStartupPreference {
+    param(
+        [Parameter(Mandatory = $true)]
+        [bool]$Enabled,
+        [Parameter(Mandatory = $true)]
+        [string]$ScriptPath,
+        [Parameter(Mandatory = $true)]
+        [string]$Distro
+    )
+
+    if ($Enabled) {
+        Register-WslServarrStartupTask -ScriptPath $ScriptPath -Distro $Distro
+    } else {
+        Unregister-WslServarrStartupTask
+        Write-Host "[Startup] Windows auto-start disabled." -ForegroundColor DarkGray
+    }
+}
+
+function Read-WslServarrStartupPreference {
+    param(
+        [bool]$DefaultEnabled = $true
+    )
+
+    $defaultPrompt = if ($DefaultEnabled) { 'Y/n' } else { 'y/N' }
+    $response = Read-Host "Start WSLServarr automatically with Windows? [$defaultPrompt]"
+    if ([string]::IsNullOrWhiteSpace($response)) {
+        return $DefaultEnabled
+    }
+
+    switch -Regex ($response.Trim()) {
+        '^(y|yes)$' { return $true }
+        '^(n|no)$'  { return $false }
+        default {
+            Write-Host "Please answer y or n." -ForegroundColor Yellow
+            return Read-WslServarrStartupPreference -DefaultEnabled $DefaultEnabled
+        }
+    }
 }
 
 $savedInstallSettings = Get-SavedInstallSettings
@@ -434,16 +520,17 @@ if ([string]::IsNullOrWhiteSpace($Action)) {
     Write-Host "  4) RestartAll - Restart all stack services"
     Write-Host "  5) Uninstall - Remove WSLServarr"
     Write-Host "  6) Reinstall - Recreate distro and reinstall stack"
+    Write-Host "  7) Startup   - Enable/disable start with Windows"
     Write-Host ""
 
     $choice = $null
-    Write-Host "Defaulting to 'Run app' in 5 seconds... Press 1-6 to choose another option." -ForegroundColor Yellow
+    Write-Host "Defaulting to 'Run app' in 5 seconds... Press 1-7 to choose another option." -ForegroundColor Yellow
     try {
         $deadline = (Get-Date).AddSeconds(5)
         while ((Get-Date) -lt $deadline) {
             if ([Console]::KeyAvailable) {
                 $key = [Console]::ReadKey($true)
-                if ($key.KeyChar -match '^[1-6]$') {
+                if ($key.KeyChar -match '^[1-7]$') {
                     $choice = [string]$key.KeyChar
                     break
                 }
@@ -465,6 +552,7 @@ if ([string]::IsNullOrWhiteSpace($Action)) {
         "4" { $Action = "RestartAll" }
         "5" { $Action = "Uninstall" }
         "6" { $Action = "Reinstall" }
+        "7" { $Action = "Startup" }
         default {
             Write-Host "Invalid choice. Exiting." -ForegroundColor Red
             exit 1
@@ -475,9 +563,9 @@ if ([string]::IsNullOrWhiteSpace($Action)) {
 
 $script:lastLanPortSync = Get-Date
 
-$actionsRequiringAdmin = @('Run', 'Setup', 'Update', 'RestartAll')
+$actionsRequiringAdmin = @('Run', 'Setup', 'Update', 'RestartAll', 'Startup')
 if ($actionsRequiringAdmin -contains $Action -and -not (Test-RunningAsAdministrator)) {
-    throw "Action '$Action' requires Administrator privileges for LAN access (portproxy + firewall). Re-run PowerShell as Administrator and run .\\wslservarr.ps1 again."
+    throw "Action '$Action' requires Administrator privileges for startup task or LAN configuration changes. Re-run PowerShell as Administrator and run .\\wslservarr.ps1 again."
 }
 
 if ($Action -eq "Reinstall") {
@@ -493,6 +581,20 @@ if ($Action -eq "Run") {
 
 if ($Action -eq "RestartAll") {
     Restart-AllServices -Distro $DistroName
+    exit 0
+}
+
+if ($Action -eq "Startup") {
+    $startupRegistered = Test-WslServarrStartupTaskRegistered
+    Write-Host ""
+    Write-Host "=== WSLServarr Startup Preference ===" -ForegroundColor Cyan
+    Write-Host "Current setting: $(if ($startupRegistered) { 'Enabled' } else { 'Disabled' })"
+    Write-Host ""
+
+    $enableStartup = Read-WslServarrStartupPreference -DefaultEnabled $startupRegistered
+    Set-WslServarrStartupPreference -Enabled $enableStartup -ScriptPath $PSCommandPath -Distro $DistroName
+
+    Write-Host "Startup preference updated." -ForegroundColor Green
     exit 0
 }
 
@@ -555,7 +657,11 @@ if ($Action -eq "Setup") {
     Write-Host "  /mnt/downloads (in WSL)"
     Write-Host ""
 
+    $startupDefaultEnabled = Test-WslServarrStartupTaskRegistered
+    $enableStartupWithWindows = Read-WslServarrStartupPreference -DefaultEnabled $startupDefaultEnabled
+
     Save-InstallSettings -RootPath $dataRootPath -ResolvedInstallPath $InstallPath -Distro $DistroName
+    Set-WslServarrStartupPreference -Enabled $enableStartupWithWindows -ScriptPath $PSCommandPath -Distro $DistroName
 
     if ([string]::IsNullOrWhiteSpace($RootFsTar)) {
         $installedDistros = @(wsl -l -q)
@@ -945,6 +1051,12 @@ fi
 # ============================================================================
 
 elseif ($Action -eq "Uninstall") {
+    try {
+        Unregister-WslServarrStartupTask
+    } catch {
+        Write-Warning "Could not remove Windows startup task '$StartupTaskName': $($_.Exception.Message)"
+    }
+
     $existing = wsl -l -q
     if ($existing -notcontains $DistroName) {
         Write-Warning "Distro '$DistroName' was not found."
