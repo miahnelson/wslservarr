@@ -129,7 +129,8 @@ function Invoke-SelfUpdateIfNeeded {
     }
 
     try {
-        $remoteContent = (Invoke-WebRequest -Uri $rawUrl -UseBasicParsing -TimeoutSec 20).Content
+        $cacheBustingUrl = '{0}?ts={1}' -f $rawUrl, [DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
+        $remoteContent = (Invoke-WebRequest -Uri $cacheBustingUrl -UseBasicParsing -TimeoutSec 20 -Headers @{ 'Cache-Control' = 'no-cache'; 'Pragma' = 'no-cache' }).Content
         if ([string]::IsNullOrWhiteSpace($remoteContent)) {
             return $false
         }
@@ -137,6 +138,18 @@ function Invoke-SelfUpdateIfNeeded {
         $localContent = Get-Content -LiteralPath $ScriptPath -Raw
         $normalizedLocal = ($localContent -replace "`r`n", "`n").Trim()
         $normalizedRemote = ($remoteContent -replace "`r`n", "`n").Trim()
+
+        $localHasRelocationSupport =
+            ($normalizedLocal -match '(?m)^\s*function\s+Invoke-SetupFromDataRoot\b') -and
+            ($normalizedLocal -match '(?m)^\s*\[switch\]\$RelaunchedFromDataRoot\b')
+        $remoteHasRelocationSupport =
+            ($normalizedRemote -match '(?m)^\s*function\s+Invoke-SetupFromDataRoot\b') -and
+            ($normalizedRemote -match '(?m)^\s*\[switch\]\$RelaunchedFromDataRoot\b')
+
+        if ($localHasRelocationSupport -and -not $remoteHasRelocationSupport) {
+            Write-Warning "Self-update skipped because the downloaded script appears older than the installed launcher."
+            return $false
+        }
 
         if ($normalizedLocal -eq $normalizedRemote) {
             return $false
