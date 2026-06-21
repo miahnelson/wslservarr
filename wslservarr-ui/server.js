@@ -1223,18 +1223,25 @@ async function getDashboardData() {
   let autoSetupTriggered = false;
   let autoSetupMessage = '';
 
-  if (!config.setup.completed && !deployState.running) {
-    startInitialSetupJob(config);
-    autoSetupTriggered = true;
-    autoSetupMessage = 'First start detected. Deploying missing or stopped apps and applying integrations automatically.';
-  }
-
   let containers = [];
   try {
     containers = await getContainerStatuses();
   } catch (e) {
     containers = TARGET_CONTAINERS.map(name => ({ name, status: `error: ${e.message}` }));
   }
+
+  const allManagedAppsMissing =
+    containers.length > 0 &&
+    containers.every((entry) => entry.status === 'missing');
+
+  if ((!config.setup.completed || allManagedAppsMissing) && !deployState.running) {
+    startInitialSetupJob(config);
+    autoSetupTriggered = true;
+    autoSetupMessage = allManagedAppsMissing
+      ? 'All managed app containers are missing. Running automatic deploy and integration setup.'
+      : 'First start detected. Deploying missing or stopped apps and applying integrations automatically.';
+  }
+
   return {
     config: readEffectiveConfig({ persist: true }),
     containers,
