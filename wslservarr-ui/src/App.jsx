@@ -120,6 +120,15 @@ function App() {
       const next = mergeConfig(data.config);
       setConfig(next);
       setContainers(Array.isArray(data.containers) ? data.containers : []);
+      if (data.deployState) {
+        setDeployState(data.deployState);
+        if (data.deployState.running || (data.deployState.logs || []).length || data.deployState.error) {
+          setShowDeployOutput(true);
+        }
+      }
+      if (data.autoSetupMessage) {
+        setMessage(data.autoSetupMessage);
+      }
       setError('');
     } catch (e) {
       setError(e.message);
@@ -535,6 +544,14 @@ function App() {
     return 'pill stopped';
   }
 
+  function getDeployOperationLabel() {
+    if (deployState.operation === 'restart') return 'Restart';
+    if (deployState.operation === 'initialize') return 'First-Start Setup';
+    return 'Deploy';
+  }
+
+  const deployOperationLabel = getDeployOperationLabel();
+
   const modalTitles = {
     paths: 'Paths & Runtime',
     sonarr: 'Sonarr',
@@ -678,15 +695,15 @@ function App() {
           <div className="modal" onClick={(e) => e.stopPropagation()}>
             <div className="modal-header">
               <div>
-                <h3>{deployState.operation === 'restart' ? 'Restart Output' : 'Deploy Output'}</h3>
+                <h3>{deployOperationLabel} Output</h3>
                 <p className="hint" style={{ marginTop: 6 }}>
                   {deployState.running
-                    ? `${deployState.operation === 'restart' ? 'Restart' : 'Deployment'} in progress...`
+                    ? `${deployOperationLabel} in progress...`
                     : deployState.success === true
-                      ? `Last ${deployState.operation === 'restart' ? 'restart' : 'deployment'} completed successfully.`
+                      ? `Last ${deployOperationLabel.toLowerCase()} completed successfully.`
                       : deployState.success === false
-                        ? `Last ${deployState.operation === 'restart' ? 'restart' : 'deployment'} failed.`
-                        : `${deployState.operation === 'restart' ? 'Restart' : 'Deployment'} log.`}
+                        ? `Last ${deployOperationLabel.toLowerCase()} failed.`
+                        : `${deployOperationLabel} log.`}
                 </p>
               </div>
               <button type="button" className="secondary modal-close" onClick={() => setShowDeployOutput(false)}>✕</button>

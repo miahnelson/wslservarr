@@ -1129,13 +1129,28 @@ function buildConfigFromBody(body) {
 
 async function getDashboardData() {
   const config = readEffectiveConfig({ persist: true });
+  let autoSetupTriggered = false;
+  let autoSetupMessage = '';
+
+  if (!config.setup.completed && !deployState.running) {
+    startInitialSetupJob(config);
+    autoSetupTriggered = true;
+    autoSetupMessage = 'First start detected. Deploying missing or stopped apps and applying integrations automatically.';
+  }
+
   let containers = [];
   try {
     containers = await getContainerStatuses();
   } catch (e) {
     containers = TARGET_CONTAINERS.map(name => ({ name, status: `error: ${e.message}` }));
   }
-  return { config, containers };
+  return {
+    config: readEffectiveConfig({ persist: true }),
+    containers,
+    deployState,
+    autoSetupTriggered,
+    autoSetupMessage
+  };
 }
 
 
@@ -1465,6 +1480,40 @@ async function installOrUpdateSingleAppWithProgress(config, appName, onProgress)
   if (onProgress) onProgress(`${appName} deployment completed.`);
 }
 
+async function runInitialSetupWithProgress(config, onProgress) {
+  const cfg = normalizeConfig(config);
+  const statuses = await getContainerStatuses();
+  const runningApps = statuses.filter((entry) => entry.status === 'running').map((entry) => entry.name);
+  const stoppedApps = statuses.filter((entry) => entry.status === 'stopped').map((entry) => entry.name);
+  const missingApps = statuses.filter((entry) => entry.status === 'missing').map((entry) => entry.name);
+  const appsToStart = statuses.filter((entry) => entry.status !== 'running').map((entry) => entry.name);
+
+  if (onProgress) {
+    onProgress(`Detected running apps: ${runningApps.length ? runningApps.join(', ') : 'none'}`);
+    onProgress(`Detected stopped apps: ${stoppedApps.length ? stoppedApps.join(', ') : 'none'}`);
+    onProgress(`Detected missing apps: ${missingApps.length ? missingApps.join(', ') : 'none'}`);
+  }
+
+  if (appsToStart.length) {
+    if (onProgress) onProgress(`Deploying or starting apps: ${appsToStart.join(', ')}`);
+    for (const appName of appsToStart) {
+      await installOrUpdateSingleAppWithProgress(cfg, appName, onProgress);
+    }
+  } else if (onProgress) {
+    onProgress('All apps are already deployed and running.');
+  }
+
+  if (onProgress) onProgress('Applying first-start integration and relink steps...');
+  await relinkAppsWithProgress(null, onProgress);
+
+  const next = readEffectiveConfig({ persist: true });
+  next.setup.completed = true;
+  next.setup.completedAt = new Date().toISOString();
+  writeConfig(next);
+
+  if (onProgress) onProgress('First-start setup completed.');
+}
+
 async function restartAppsWithProgress(config, appName = null, onProgress) {
   const cfg = normalizeConfig(config);
   const appNames = appName
@@ -1518,7 +1567,13 @@ function startOperationJob(operation, config, appName = null) {
     error: '',
     logs: []
   });
-  pushDeployLog(appName ? `${operation === 'restart' ? 'Restart' : 'Deployment'} started for ${appName}...` : `${operation === 'restart' ? 'Restart' : 'Deployment'} started...`);
+  pushDeployLog(
+    operation === 'initialize'
+      ? 'First-start setup started...'
+      : appName
+        ? `${operation === 'restart' ? 'Restart' : 'Deployment'} started for ${appName}...`
+        : `${operation === 'restart' ? 'Restart' : 'Deployment'} started...`
+  );
 
   (async () => {
     try {
@@ -1527,6 +1582,8 @@ function startOperationJob(operation, config, appName = null) {
         await restartAppsWithProgress(cfg, appName, pushDeployLog);
         pushDeployLog('Running automatic post-restart app relink...');
         await relinkAppsWithProgress(appName, pushDeployLog);
+      } else if (operation === 'initialize') {
+        await runInitialSetupWithProgress(cfg, pushDeployLog);
       } else if (appName) {
         await installOrUpdateSingleAppWithProgress(cfg, appName, pushDeployLog);
 
@@ -1572,6 +1629,10 @@ function startRestartJob(config, appName = null) {
   }
 
   startOperationJob('restart', config, appName);
+}
+
+function startInitialSetupJob(config) {
+  startOperationJob('initialize', config, null);
 }
 
 function sendSpa(res) {
