@@ -2,6 +2,7 @@ const express = require('express');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
+const crypto = require('crypto');
 const axios = require('axios');
 const Docker = require('dockerode');
 const { execFile, spawn } = require('child_process');
@@ -14,6 +15,7 @@ const SPA_DIST_PATH = path.join(__dirname, 'dist');
 const PORT = process.env.PORT || 5055;
 const CONFIG_PATH = process.env.CONFIG_PATH || '/data/config.json';
 const DIAGNOSTICS_DIR = process.env.DIAGNOSTICS_DIR || '/data/diagnostics';
+const UI_AUTH_PATH = process.env.UI_AUTH_PATH || '/data/ui-auth.json';
 const API_TOKEN = (process.env.WSLSERVARR_API_TOKEN || '').trim();
 const TARGET_CONTAINERS = ['sabnzbd', 'prowlarr', 'sonarr', 'radarr', 'jellyfin'];
 const APPS_COMPOSE_PATH = '/opt/wslservarr/compose.apps.yml';
@@ -27,6 +29,8 @@ const APP_API_KEY_SOURCES = {
   sabnzbd: { path: SABNZBD_CONFIG_PATH, format: 'ini' }
 };
 const execFileAsync = promisify(execFile);
+const uiSessions = new Map();
+const UI_SESSION_TTL_MS = 1000 * 60 * 60 * 24;
 const deployClients = new Set();
 const deployState = {
   running: false,
@@ -44,10 +48,109 @@ app.use(express.json());
 app.use('/api', (req, res, next) => {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET,POST,PUT,OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Api-Token');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Api-Token, X-Ui-Auth');
   if (req.method === 'OPTIONS') return res.sendStatus(204);
   next();
 });
+
+function hashPassword(password, salt) {
+  const normalizedPassword = String(password || '');
+  return crypto.scryptSync(normalizedPassword, salt, 64).toString('hex');
+}
+
+function buildDefaultUiAuthState() {
+  const salt = crypto.randomBytes(16).toString('hex');
+  return {
+    username: 'admin',
+    passwordSalt: salt,
+    passwordHash: hashPassword('admin', salt),
+    mustChangePassword: true,
+    passwordChangedAt: null,
+    createdAt: new Date().toISOString()
+  };
+}
+
+function readUiAuthState() {
+  try {
+    if (!fs.existsSync(UI_AUTH_PATH)) {
+      const initial = buildDefaultUiAuthState();
+      fs.writeFileSync(UI_AUTH_PATH, JSON.stringify(initial, null, 2));
+      return initial;
+    }
+
+    const raw = JSON.parse(fs.readFileSync(UI_AUTH_PATH, 'utf8'));
+    const normalized = {
+      username: String(raw.username || 'admin').trim() || 'admin',
+      passwordSalt: String(raw.passwordSalt || ''),
+      passwordHash: String(raw.passwordHash || ''),
+      mustChangePassword: Boolean(raw.mustChangePassword),
+      passwordChangedAt: raw.passwordChangedAt || null,
+      createdAt: raw.createdAt || new Date().toISOString()
+    };
+
+    if (!normalized.passwordSalt || !normalized.passwordHash) {
+      const repaired = buildDefaultUiAuthState();
+      fs.writeFileSync(UI_AUTH_PATH, JSON.stringify(repaired, null, 2));
+      return repaired;
+    }
+
+    return normalized;
+  } catch {
+    const fallback = buildDefaultUiAuthState();
+    fs.writeFileSync(UI_AUTH_PATH, JSON.stringify(fallback, null, 2));
+    return fallback;
+  }
+}
+
+function writeUiAuthState(state) {
+  const next = {
+    username: String(state.username || 'admin').trim() || 'admin',
+    passwordSalt: String(state.passwordSalt || ''),
+    passwordHash: String(state.passwordHash || ''),
+    mustChangePassword: Boolean(state.mustChangePassword),
+    passwordChangedAt: state.passwordChangedAt || null,
+    createdAt: state.createdAt || new Date().toISOString()
+  };
+  fs.writeFileSync(UI_AUTH_PATH, JSON.stringify(next, null, 2));
+  return next;
+}
+
+function getUiAuthToken(req) {
+  const fromHeader = req.headers['x-ui-auth'];
+  if (typeof fromHeader === 'string' && fromHeader.trim()) {
+    return fromHeader.trim();
+  }
+  if (Array.isArray(fromHeader) && fromHeader.length) {
+    return String(fromHeader[0] || '').trim();
+  }
+
+  if (typeof req.query?.authToken === 'string' && req.query.authToken.trim()) {
+    return req.query.authToken.trim();
+  }
+
+  return '';
+}
+
+function createUiSession(username) {
+  const token = crypto.randomBytes(24).toString('hex');
+  const expiresAt = Date.now() + UI_SESSION_TTL_MS;
+  uiSessions.set(token, { username, expiresAt });
+  return { token, expiresAt };
+}
+
+function getValidUiSession(token) {
+  const value = uiSessions.get(token);
+  if (!value) return null;
+  if (value.expiresAt <= Date.now()) {
+    uiSessions.delete(token);
+    return null;
+  }
+  return value;
+}
+
+function destroyUiSession(token) {
+  if (token) uiSessions.delete(token);
+}
 
 function getRequestToken(req) {
   const auth = String(req.headers.authorization || '');
@@ -80,6 +183,37 @@ function requireApiToken(req, res, next) {
 
 app.use('/api', requireApiToken);
 app.use('/container', requireApiToken);
+
+function requireUiAuth(req, res, next) {
+  if (req.path.startsWith('/auth/')) {
+    return next();
+  }
+
+  const token = getUiAuthToken(req);
+  const session = getValidUiSession(token);
+  if (!session) {
+    return res.status(401).json({ ok: false, error: 'Authentication required', authRequired: true });
+  }
+
+  req.uiAuthToken = token;
+  req.uiAuthSession = session;
+  return next();
+}
+
+app.use('/api', requireUiAuth);
+app.use('/container', requireUiAuth);
+
+function requirePasswordChangeCompleted(req, res, next) {
+  const authState = readUiAuthState();
+  if (authState.mustChangePassword) {
+    return res.status(403).json({
+      ok: false,
+      error: 'Password change required before deploying apps.',
+      code: 'PASSWORD_CHANGE_REQUIRED'
+    });
+  }
+  return next();
+}
 
 function withTimeout(promise, ms, label) {
   let timer;
@@ -1905,6 +2039,109 @@ function sendSpa(res) {
   res.sendFile(path.join(SPA_DIST_PATH, 'index.html'));
 }
 
+app.get('/api/auth/status', (req, res) => {
+  const token = getUiAuthToken(req);
+  const session = getValidUiSession(token);
+  const authState = readUiAuthState();
+
+  if (!session) {
+    return res.json({
+      ok: true,
+      authenticated: false,
+      mustChangePassword: false,
+      username: null
+    });
+  }
+
+  return res.json({
+    ok: true,
+    authenticated: true,
+    mustChangePassword: Boolean(authState.mustChangePassword),
+    username: authState.username
+  });
+});
+
+app.post('/api/auth/login', (req, res) => {
+  try {
+    const username = String(req.body?.username || '').trim();
+    const password = String(req.body?.password || '');
+    const authState = readUiAuthState();
+
+    if (!username || !password) {
+      return res.status(400).json({ ok: false, error: 'Username and password are required.' });
+    }
+
+    const expectedHash = hashPassword(password, authState.passwordSalt);
+    if (username !== authState.username || expectedHash !== authState.passwordHash) {
+      return res.status(401).json({ ok: false, error: 'Invalid username or password.' });
+    }
+
+    const session = createUiSession(authState.username);
+    return res.json({
+      ok: true,
+      authToken: session.token,
+      authenticated: true,
+      mustChangePassword: Boolean(authState.mustChangePassword),
+      username: authState.username,
+      expiresAt: new Date(session.expiresAt).toISOString()
+    });
+  } catch (e) {
+    return res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+app.post('/api/auth/change-password', (req, res) => {
+  try {
+    const token = getUiAuthToken(req);
+    const session = getValidUiSession(token);
+    if (!session) {
+      return res.status(401).json({ ok: false, error: 'Authentication required', authRequired: true });
+    }
+
+    const currentPassword = String(req.body?.currentPassword || '');
+    const newPassword = String(req.body?.newPassword || '');
+    const confirmPassword = String(req.body?.confirmPassword || '');
+
+    if (!currentPassword || !newPassword || !confirmPassword) {
+      return res.status(400).json({ ok: false, error: 'All password fields are required.' });
+    }
+    if (newPassword !== confirmPassword) {
+      return res.status(400).json({ ok: false, error: 'New password and confirmation must match.' });
+    }
+    if (newPassword.length < 8) {
+      return res.status(400).json({ ok: false, error: 'New password must be at least 8 characters.' });
+    }
+
+    const authState = readUiAuthState();
+    const currentHash = hashPassword(currentPassword, authState.passwordSalt);
+    if (currentHash !== authState.passwordHash) {
+      return res.status(401).json({ ok: false, error: 'Current password is incorrect.' });
+    }
+
+    const nextSalt = crypto.randomBytes(16).toString('hex');
+    authState.passwordSalt = nextSalt;
+    authState.passwordHash = hashPassword(newPassword, nextSalt);
+    authState.mustChangePassword = false;
+    authState.passwordChangedAt = new Date().toISOString();
+    writeUiAuthState(authState);
+
+    return res.json({
+      ok: true,
+      authenticated: true,
+      mustChangePassword: false,
+      username: authState.username
+    });
+  } catch (e) {
+    return res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+app.post('/api/auth/logout', (req, res) => {
+  const token = getUiAuthToken(req);
+  destroyUiSession(token);
+  return res.json({ ok: true });
+});
+
 app.get('/wizard', async (req, res) => {
   return res.redirect('/');
 });
@@ -2004,7 +2241,7 @@ app.post('/api/test/:appName', async (req, res) => {
   }
 });
 
-app.post('/api/apply', async (req, res) => {
+app.post('/api/apply', requirePasswordChangeCompleted, async (req, res) => {
   try {
     await relinkAppsWithProgress(null, pushDeployLog);
     res.json({ ok: true, message: 'Relinked deployed apps and refreshed Prowlarr/SAB/Arr integration.' });
@@ -2018,7 +2255,7 @@ app.post('/api/apply', async (req, res) => {
   }
 });
 
-app.post('/api/install/apps/:appName/start', (req, res) => {
+app.post('/api/install/apps/:appName/start', requirePasswordChangeCompleted, (req, res) => {
   try {
     const appName = req.params.appName;
     if (!TARGET_CONTAINERS.includes(appName)) {
@@ -2033,7 +2270,7 @@ app.post('/api/install/apps/:appName/start', (req, res) => {
   }
 });
 
-app.post('/api/install/apps/restart', (req, res) => {
+app.post('/api/install/apps/restart', requirePasswordChangeCompleted, (req, res) => {
   try {
     const cfg = readEffectiveConfig({ persist: true });
     startRestartJob(cfg);
@@ -2043,7 +2280,7 @@ app.post('/api/install/apps/restart', (req, res) => {
   }
 });
 
-app.post('/api/install/apps/:appName/restart', (req, res) => {
+app.post('/api/install/apps/:appName/restart', requirePasswordChangeCompleted, (req, res) => {
   try {
     const appName = req.params.appName;
     if (!TARGET_CONTAINERS.includes(appName)) {
@@ -2126,6 +2363,14 @@ app.post('/container/:name/:action', async (req, res) => {
   }
 
   try {
+    if ((action === 'start' || action === 'restart') && readUiAuthState().mustChangePassword) {
+      return res.status(403).json({
+        ok: false,
+        error: 'Password change required before deploying apps.',
+        code: 'PASSWORD_CHANGE_REQUIRED'
+      });
+    }
+
     if (action === 'start' || action === 'restart') {
       const cfg = readEffectiveConfig({ persist: true });
       if (!cfg[name]?.enabled) {

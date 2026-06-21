@@ -25,6 +25,21 @@ body {
 	padding: 20px;
 }
 
+.auth-page {
+	max-width: 520px;
+	padding-top: 40px;
+}
+
+.auth-card {
+	padding: 20px;
+}
+
+.auth-form {
+	display: flex;
+	flex-direction: column;
+	gap: 8px;
+}
+
 .topbar {
 	display: flex;
 	justify-content: space-between;
@@ -156,6 +171,63 @@ button.secondary {
 
 .menu-item:hover:not(:disabled) {
 	background: rgba(255, 255, 255, 0.05);
+}
+
+.menu-password-form {
+	padding: 4px 8px;
+	display: flex;
+	flex-direction: column;
+	gap: 6px;
+}
+
+.menu-password-form label {
+	margin: 0;
+	font-size: 0.72rem;
+}
+
+.menu-password-form input {
+	padding: 6px 8px;
+	font-size: 0.82rem;
+}
+
+.menu-password-form button {
+	margin-top: 6px;
+}
+
+.menu-submenu-toggle {
+	display: flex;
+	justify-content: space-between;
+	align-items: center;
+}
+
+.menu-submenu {
+	margin: 2px 4px 6px;
+	border: 1px solid var(--border);
+	border-radius: 8px;
+	background: rgba(255, 255, 255, 0.02);
+}
+
+.menu-divider {
+	height: 1px;
+	background: var(--border);
+	margin: 6px 0;
+}
+
+.menu-section-title {
+	font-size: 0.72rem;
+	font-weight: 700;
+	letter-spacing: 0.04em;
+	text-transform: uppercase;
+	color: var(--text-dim);
+	padding: 4px 8px;
+}
+
+.menu-metric-value.ok {
+	color: var(--ok);
+}
+
+.menu-metric-value.missing {
+	color: var(--warn);
 }
 
 button:disabled { opacity: 0.6; cursor: not-allowed; }
