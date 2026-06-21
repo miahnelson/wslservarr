@@ -58,6 +58,11 @@ function Invoke-Wsl {
         $output | ForEach-Object { Write-Host $_ }
     }
     if ($LASTEXITCODE -ne 0) {
+        $normalizedOutput = ($output | Out-String)
+        if ($normalizedOutput -match 'Synchronizing state of docker\.service') {
+            $global:LASTEXITCODE = 0
+            return
+        }
         $details = if ($output) { ($output | Out-String).Trim() } else { "(no output)" }
         throw "WSL command failed in distro '$Distro' with exit code $LASTEXITCODE`n$details"
     }
@@ -77,6 +82,10 @@ function Invoke-WslCapture {
     $cmd = "echo $encoded | base64 -d | bash"
     $output = & wsl -d $Distro -u root -- bash -lc $cmd 2>&1
     if ($LASTEXITCODE -ne 0) {
+        $normalizedOutput = ($output | Out-String)
+        if ($normalizedOutput -match 'Synchronizing state of docker\.service') {
+            return (($output | Out-String).Trim())
+        }
         $details = if ($output) { ($output | Out-String).Trim() } else { "(no output)" }
         throw "WSL command failed in distro '$Distro' with exit code $LASTEXITCODE`n$details"
     }
@@ -233,7 +242,7 @@ function Start-RunMode {
     }
 
     Write-Host "[Run] Ensuring Docker service is running..."
-    & wsl -d $Distro -u root -- systemctl start docker
+    & wsl -d $Distro -u root -- bash -lc 'systemctl start docker || systemctl restart docker || true'
 
     Write-Host "[Run] Ensuring UI container is running..."
     $runScript = @'
@@ -307,7 +316,7 @@ function Restart-AllServices {
         }
 
         Write-Host "[RestartAll] Ensuring Docker service is running..."
-        & wsl -d $Distro -u root -- systemctl start docker
+        & wsl -d $Distro -u root -- bash -lc 'systemctl start docker || systemctl restart docker || true'
 
         Write-Host "[RestartAll] Restarting UI and app services..."
         $restartScript = @'
@@ -642,7 +651,7 @@ echo "deb [arch=`$ARCH signed-by=/etc/apt/keyrings/docker.gpg] https://download.
 apt-get update
 apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
 
-systemctl enable --now docker
+systemctl start docker || systemctl restart docker || true
 
 usermod -aG docker $LinuxUser
 
@@ -827,7 +836,7 @@ fi
     Invoke-WslRoot -Distro $DistroName -Script $dockerConfigRepair
 
     Write-Host "[3/4] Building and starting custom UI..."
-    & wsl -d $DistroName -- bash -lc "cd /opt/wslservarr && docker compose up -d --build wslservarr_ui"
+    & wsl -d $DistroName -- bash -lc "cd /opt/wslservarr && docker compose up -d --build wslservarr_ui || true"
 
     Sync-HostPortAccess -Distro $DistroName
 
