@@ -6,7 +6,7 @@ const defaultConfig = {
   radarr: { enabled: false, url: 'http://radarr:7878', apiKey: '', port: '7878', movieRoot: '/media/movies', composeYaml: '' },
   sabnzbd: { enabled: false, url: 'http://sabnzbd:8080', apiKey: '', port: '8080', tvCategory: 'tv', movieCategory: 'movies', composeYaml: '' },
   prowlarr: { enabled: false, url: 'http://prowlarr:9696', apiKey: '', port: '9696', composeYaml: '' },
-  jellyfin: { enabled: false, url: 'http://jellyfin:8096', apiKey: '', port: '8096', composeYaml: '' },
+  jellyfin: { enabled: false, url: 'http://jellyfin:8096', apiKey: '', port: '8096', setupUsername: '', setupPassword: '', composeYaml: '' },
   paths: { mediaRoot: '/mnt/media', downloadsRoot: '/mnt/downloads', configRoot: '/mnt/config' },
   runtime: { timezone: 'America/New_York', puid: '1000', pgid: '1000' },
   composeYaml: ''
@@ -402,6 +402,8 @@ function App() {
       jellyfinUrl: config.jellyfin.url,
       jellyfinApiKey: config.jellyfin.apiKey,
       jellyfinPort: config.jellyfin.port,
+      jellyfinSetupUsername: config.jellyfin.setupUsername,
+      jellyfinSetupPassword: config.jellyfin.setupPassword,
       mediaRoot: config.paths.mediaRoot,
       downloadsRoot: config.paths.downloadsRoot,
       configRoot: config.paths.configRoot,
@@ -595,6 +597,11 @@ function App() {
         {app === 'sabnzbd' ? <>
           <label>TV Category</label><input value={appConfig.tvCategory || ''} onChange={(e) => update('sabnzbd.tvCategory', e.target.value)} />
           <label>Movie Category</label><input value={appConfig.movieCategory || ''} onChange={(e) => update('sabnzbd.movieCategory', e.target.value)} />
+        </> : null}
+        {app === 'jellyfin' ? <>
+          <label>Initial Admin Username</label><input value={appConfig.setupUsername || ''} onChange={(e) => update('jellyfin.setupUsername', e.target.value)} />
+          <label>Initial Admin Password</label><input type="password" value={appConfig.setupPassword || ''} onChange={(e) => update('jellyfin.setupPassword', e.target.value)} />
+          <p className="hint" style={{ marginTop: 8 }}>Used only during Jellyfin first-start setup before the Jellyfin startup wizard is completed.</p>
         </> : null}
         {app === 'prowlarr' ? <p className="hint" style={{ marginTop: 8 }}>Sonarr/Radarr indexers are managed through Prowlarr only.</p> : null}
         <p className="hint" style={{ marginTop: 8 }}>This app deploys from its own YAML only. Changes here affect this app when you click Start (if missing), Deploy, or RestartAll.</p>

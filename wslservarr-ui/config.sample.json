@@ -36,6 +36,8 @@
     "url": "http://jellyfin:8096",
     "apiKey": "",
     "port": 8096,
+    "setupUsername": "",
+    "setupPassword": "",
     "composeYaml": ""
   },
   "paths": {

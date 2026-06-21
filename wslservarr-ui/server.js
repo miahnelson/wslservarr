@@ -267,7 +267,9 @@ function ensureConfig() {
         enabled: false,
         url: 'http://jellyfin:8096',
         apiKey: '',
-        port: 8096
+        port: 8096,
+        setupUsername: '',
+        setupPassword: ''
       },
       paths: { 
         mediaRoot: '/mnt/media',
@@ -369,6 +371,20 @@ async function testJellyfin(url, apiKey) {
     throw new Error('Invalid Jellyfin response');
   }
   return { status: 'ok' };
+}
+
+async function getJellyfinPublicSystemInfo(url, apiKey) {
+  const base = `${String(url || '').replace(/\/$/, '')}`;
+  const headers = {};
+  if (apiKey) headers['X-Emby-Token'] = apiKey;
+  const res = await axios.get(`${base}/System/Info/Public`, {
+    timeout: 10000,
+    headers
+  });
+  if (!res.data || typeof res.data !== 'object') {
+    throw new Error('Invalid Jellyfin public system info response');
+  }
+  return res.data;
 }
 
 async function testProwlarr(url, apiKey) {
@@ -1018,7 +1034,7 @@ function normalizeConfig(config) {
   next.radarr = next.radarr || { enabled: false, url: 'http://radarr:7878', apiKey: '', port: '7878', movieRoot: '/media/movies' };
   next.sabnzbd = next.sabnzbd || { enabled: false, url: 'http://sabnzbd:8080', apiKey: '', port: '8080', tvCategory: 'tv', movieCategory: 'movies' };
   next.prowlarr = next.prowlarr || { enabled: false, url: 'http://prowlarr:9696', apiKey: '', port: '9696' };
-  next.jellyfin = next.jellyfin || { enabled: false, url: 'http://jellyfin:8096', apiKey: '', port: '8096' };
+  next.jellyfin = next.jellyfin || { enabled: false, url: 'http://jellyfin:8096', apiKey: '', port: '8096', setupUsername: '', setupPassword: '' };
   if (next.indexers && !Array.isArray(next.indexers)) next.indexers = [];
   next.paths = next.paths || { mediaRoot: '/mnt/media', downloadsRoot: '/mnt/downloads' };
   if (typeof next.sonarr.tvRoot === 'string' && next.sonarr.tvRoot.startsWith('/mnt/media')) {
@@ -1035,6 +1051,8 @@ function normalizeConfig(config) {
   next.sabnzbd.url = normalizeAppServiceUrl('sabnzbd', next.sabnzbd.url, next.sabnzbd.port || 8080);
   next.prowlarr.url = normalizeAppServiceUrl('prowlarr', next.prowlarr.url, next.prowlarr.port || 9696);
   next.jellyfin.url = normalizeAppServiceUrl('jellyfin', next.jellyfin.url, next.jellyfin.port || 8096);
+  next.jellyfin.setupUsername = typeof next.jellyfin.setupUsername === 'string' ? next.jellyfin.setupUsername : '';
+  next.jellyfin.setupPassword = typeof next.jellyfin.setupPassword === 'string' ? next.jellyfin.setupPassword : '';
 
   next.runtime = next.runtime || {};
   next.runtime.timezone = next.runtime.timezone || 'America/New_York';
@@ -1107,6 +1125,8 @@ function buildConfigFromBody(body) {
       url: body.jellyfinUrl || prev.jellyfin.url || 'http://jellyfin:8096',
       apiKey: body.jellyfinApiKey || '',
       port: body.jellyfinPort || '8096',
+      setupUsername: typeof body.jellyfinSetupUsername === 'string' ? body.jellyfinSetupUsername : (prev.jellyfin.setupUsername || ''),
+      setupPassword: typeof body.jellyfinSetupPassword === 'string' ? body.jellyfinSetupPassword : (prev.jellyfin.setupPassword || ''),
       composeYaml: typeof body.jellyfinComposeYaml === 'string' ? body.jellyfinComposeYaml : (prev.jellyfin.composeYaml || '')
     },
     indexers: Array.isArray(prev.indexers) ? prev.indexers : [],
@@ -1503,6 +1523,8 @@ async function runInitialSetupWithProgress(config, onProgress) {
     onProgress('All apps are already deployed and running.');
   }
 
+  await autoConfigureJellyfinFirstStart(cfg, onProgress);
+
   if (onProgress) onProgress('Applying first-start integration and relink steps...');
   await relinkAppsWithProgress(null, onProgress);
 
@@ -1512,6 +1534,89 @@ async function runInitialSetupWithProgress(config, onProgress) {
   writeConfig(next);
 
   if (onProgress) onProgress('First-start setup completed.');
+}
+
+async function autoConfigureJellyfinFirstStart(cfg, onProgress) {
+  if (!cfg?.jellyfin?.enabled) return;
+
+  const jellyfinUrl = getInternalServiceUrl(cfg, 'jellyfin');
+  if (!jellyfinUrl) return;
+
+  if (onProgress) onProgress('Checking Jellyfin startup state...');
+
+  const publicInfo = await retryAsync(() => getJellyfinPublicSystemInfo(jellyfinUrl, cfg.jellyfin.apiKey), 24, 2500);
+  if (publicInfo?.StartupWizardCompleted) {
+    if (onProgress) onProgress('Jellyfin startup wizard is already complete.');
+    return;
+  }
+
+  if (onProgress) onProgress('Auto-configuring Jellyfin startup wizard...');
+
+  let defaultUserName = '';
+  try {
+    const userRes = await axios.get(`${jellyfinUrl.replace(/\/$/, '')}/Startup/User`, { timeout: 10000 });
+    defaultUserName = String(userRes?.data?.Name || '').trim();
+  } catch {
+    // Continue; configuration and completion can still proceed.
+  }
+
+  await axios.post(
+    `${jellyfinUrl.replace(/\/$/, '')}/Startup/Configuration`,
+    {
+      ServerName: 'WSLServarr Jellyfin',
+      UICulture: 'en-US',
+      MetadataCountryCode: 'US',
+      PreferredMetadataLanguage: 'en'
+    },
+    {
+      timeout: 10000,
+      headers: { 'Content-Type': 'application/json' }
+    }
+  );
+
+  const desiredUserName = String(cfg?.jellyfin?.setupUsername || '').trim() || defaultUserName || 'admin';
+  const desiredPassword = String(cfg?.jellyfin?.setupPassword || '');
+
+  if (desiredPassword) {
+    await axios.post(
+      `${jellyfinUrl.replace(/\/$/, '')}/Startup/User`,
+      {
+        Name: desiredUserName,
+        Password: desiredPassword
+      },
+      {
+        timeout: 10000,
+        headers: { 'Content-Type': 'application/json' }
+      }
+    );
+
+    if (onProgress) onProgress(`Configured Jellyfin admin user: ${desiredUserName}`);
+  } else if (onProgress) {
+    onProgress('Jellyfin setup username/password not set; leaving default Jellyfin user unchanged.');
+  }
+
+  await axios.post(
+    `${jellyfinUrl.replace(/\/$/, '')}/Startup/Complete`,
+    {},
+    {
+      timeout: 10000,
+      headers: { 'Content-Type': 'application/json' }
+    }
+  );
+
+  await retryAsync(async () => {
+    const info = await getJellyfinPublicSystemInfo(jellyfinUrl, cfg.jellyfin.apiKey);
+    if (!info?.StartupWizardCompleted) {
+      throw new Error('Jellyfin startup wizard is not complete yet');
+    }
+    return info;
+  }, 12, 2000);
+
+  if (onProgress) {
+    onProgress(defaultUserName
+      ? `Jellyfin startup completed. Default user available: ${defaultUserName}`
+      : 'Jellyfin startup completed.');
+  }
 }
 
 async function restartAppsWithProgress(config, appName = null, onProgress) {
