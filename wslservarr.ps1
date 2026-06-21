@@ -1,5 +1,5 @@
 ﻿[CmdletBinding(SupportsShouldProcess = $true)]
-# ScriptVersion: 1.0.0
+# ScriptVersion: 1.0.1
 param(
     [ValidateSet("Run", "Setup", "Uninstall", "Update", "Reinstall", "RestartAll", "Startup")]
     [string]$Action,
@@ -31,7 +31,7 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
-$ScriptVersion = [Version]'1.0.0'
+$ScriptVersion = [Version]'1.0.1'
 $InstallSettingsPath = Join-Path $PSScriptRoot ".wslservarr-install.json"
 $StartupTaskName = "WSLServarr Startup"
 $ScriptInvocationParameters = @{}
@@ -283,7 +283,10 @@ function Invoke-SetupFromDataRoot {
         Copy-Item -LiteralPath $InstallSettingsPath -Destination $targetSettingsPath -Force
     }
 
-    $powershellExe = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
+    $powershellExe = (Get-Process -Id $PID).Path
+    if ([string]::IsNullOrWhiteSpace($powershellExe) -or -not (Test-Path -LiteralPath $powershellExe)) {
+        $powershellExe = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
+    }
     $relaunchArgs = @(
         '-NoLogo',
         '-NoProfile',
