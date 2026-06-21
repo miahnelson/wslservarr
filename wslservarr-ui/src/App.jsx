@@ -346,7 +346,10 @@ function App() {
       setError(data.error || 'Apply failed');
       return;
     }
-    setMessage(data.message || 'Applied');
+    const warningText = Array.isArray(data.warnings) && data.warnings.length
+      ? ` Warnings: ${data.warnings.join(' | ')}`
+      : '';
+    setMessage(`${data.message || 'Relinked deployed apps.'}${warningText}`);
   }
 
   async function discoverApiKeys() {
@@ -534,7 +537,7 @@ function App() {
             <button className="secondary" type="button" onClick={() => setConfigModal('paths')}>Paths & Runtime</button>
             <button className="secondary" type="button" onClick={() => setConfigModal('newshosting')}>Newshosting</button>
             <button className="secondary" type="button" onClick={discoverApiKeys}>Auto-Fill API Keys</button>
-            <button className="secondary" type="button" onClick={applySettings}>Apply to Apps</button>
+            <button className="secondary" type="button" onClick={applySettings}>Relink Deployed Apps</button>
             <button className="secondary" type="button" onClick={restartAll}>Restart All</button>
             <button type="button" onClick={saveConfig} disabled={saving}>{saving ? 'Saving...' : 'Save All'}</button>
           </div>
@@ -605,7 +608,7 @@ function App() {
             </div>
             <div className="modal-footer">
               <button type="button" className="secondary" onClick={() => setConfigModal(null)}>Close</button>
-              <button type="button" className="secondary" onClick={applySettings}>Apply to Apps</button>
+              <button type="button" className="secondary" onClick={applySettings}>Relink Deployed Apps</button>
               <button type="button" onClick={saveModalConfig} disabled={saving || serviceYamlLoading}>{saving ? 'Saving...' : 'Save'}</button>
             </div>
           </div>

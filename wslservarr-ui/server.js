@@ -17,6 +17,8 @@ const API_TOKEN = (process.env.WSLSERVARR_API_TOKEN || '').trim();
 const TARGET_CONTAINERS = ['sabnzbd', 'prowlarr', 'sonarr', 'radarr', 'jellyfin'];
 const APPS_COMPOSE_PATH = '/opt/wslservarr/compose.apps.yml';
 const SHARED_DOCKER_NETWORK = 'wslservarr';
+const SABNZBD_CONFIG_PATH = '/mnt/config/sabnzbd/sabnzbd.ini';
+const PROWLARR_SAB_CATEGORY = 'prowlarr';
 const execFileAsync = promisify(execFile);
 const deployClients = new Set();
 const deployState = {
@@ -543,6 +545,54 @@ async function upsertArrDownloadClient(appName, cfg) {
   }
 }
 
+async function upsertProwlarrDownloadClient(cfg) {
+  if (!cfg?.prowlarr?.enabled || !cfg?.prowlarr?.apiKey) return;
+  if (!cfg?.sabnzbd?.enabled || !cfg?.sabnzbd?.apiKey) return;
+
+  const sabConn = parseDownloadClientUrl(getInternalServiceUrl(cfg, 'sabnzbd'), cfg.sabnzbd.port);
+  const client = apiClient(getInternalServiceUrl(cfg, 'prowlarr'), cfg.prowlarr.apiKey);
+  const schemaRes = await client.get('/api/v1/downloadclient/schema');
+  const schemaList = Array.isArray(schemaRes.data) ? schemaRes.data : [];
+  const schema = schemaList.find((s) => s.implementationName === 'SABnzbd');
+  if (!schema) throw new Error('Prowlarr: SABnzbd schema not found');
+
+  const fields = (schema.fields || []).map((f) => {
+    const next = { ...f };
+    if (f.name === 'host') next.value = sabConn.host;
+    if (f.name === 'port') next.value = sabConn.port;
+    if (f.name === 'useSsl') next.value = sabConn.useSsl;
+    if (f.name === 'urlBase') next.value = sabConn.urlBase;
+    if (f.name === 'apiKey') next.value = cfg.sabnzbd.apiKey;
+    if (f.name === 'category') next.value = PROWLARR_SAB_CATEGORY;
+    return next;
+  });
+
+  const listRes = await client.get('/api/v1/downloadclient');
+  const existingList = Array.isArray(listRes.data) ? listRes.data : [];
+  const existing = existingList.find((dc) => dc.implementationName === 'SABnzbd');
+
+  const payload = {
+    ...(existing || {}),
+    enable: true,
+    name: 'SABnzbd',
+    priority: 1,
+    implementation: schema.implementation,
+    implementationName: schema.implementationName,
+    configContract: schema.configContract,
+    protocol: 'usenet',
+    categories: existing?.categories || [],
+    supportsCategories: schema.supportsCategories,
+    fields,
+    tags: existing?.tags || []
+  };
+
+  if (existing?.id) {
+    await client.put(`/api/v1/downloadclient/${existing.id}`, payload);
+  } else {
+    await client.post('/api/v1/downloadclient', payload);
+  }
+}
+
 async function upsertSabNewshostingServer(cfg) {
   if (!cfg?.sabnzbd?.enabled || !cfg?.sabnzbd?.apiKey) return;
   if (!cfg?.newshosting?.enabled) return;
@@ -582,6 +632,69 @@ async function upsertSabNewshostingServer(cfg) {
   if (!ok) {
     throw new Error(`Failed to seed Newshosting in SABnzbd: ${typeof body === 'string' ? body : JSON.stringify(body)}`);
   }
+}
+
+async function ensureSabCategory(cfg, categoryName) {
+  const name = String(categoryName || '').trim();
+  if (!name) return;
+  if (!cfg?.sabnzbd?.enabled || !cfg?.sabnzbd?.apiKey) return;
+
+  const sabUrl = getInternalServiceUrl(cfg, 'sabnzbd').replace(/\/$/, '');
+  await axios.get(`${sabUrl}/api`, {
+    params: {
+      mode: 'set_config',
+      section: 'categories',
+      name,
+      apikey: cfg.sabnzbd.apiKey,
+      output: 'json'
+    },
+    timeout: 10000
+  });
+}
+
+async function ensureSabCategories(cfg, onProgress) {
+  if (!cfg?.sabnzbd?.enabled || !cfg?.sabnzbd?.apiKey) return;
+
+  const desired = [cfg?.sabnzbd?.tvCategory, cfg?.sabnzbd?.movieCategory, PROWLARR_SAB_CATEGORY]
+    .map((value) => String(value || '').trim())
+    .filter(Boolean);
+
+  for (const categoryName of new Set(desired)) {
+    if (onProgress) onProgress(`Ensuring SABnzbd category exists: ${categoryName}`);
+    await ensureSabCategory(cfg, categoryName);
+  }
+}
+
+function ensureSabHostWhitelist() {
+  if (!fs.existsSync(SABNZBD_CONFIG_PATH)) return false;
+
+  const text = fs.readFileSync(SABNZBD_CONFIG_PATH, 'utf8');
+  const desiredHosts = ['localhost', '127.0.0.1', '::1', 'sabnzbd', 'sonarr', 'radarr', 'prowlarr', 'wslservarr_ui', 'host.docker.internal'];
+  const match = text.match(/^host_whitelist\s*=\s*(.*)$/m);
+  const current = new Set(
+    String(match?.[1] || '')
+      .split(',')
+      .map((entry) => entry.trim())
+      .filter(Boolean)
+  );
+
+  let changed = false;
+  for (const host of desiredHosts) {
+    if (!current.has(host)) {
+      current.add(host);
+      changed = true;
+    }
+  }
+
+  if (!changed) return false;
+
+  const updatedLine = `host_whitelist = ${Array.from(current).join(',')}`;
+  const nextText = match
+    ? text.replace(/^host_whitelist\s*=\s*.*$/m, updatedLine)
+    : `${text.trimEnd()}\nhost_whitelist = ${Array.from(current).join(',')}\n`;
+
+  fs.writeFileSync(SABNZBD_CONFIG_PATH, nextText);
+  return true;
 }
 
 function buildNewznabFields(schemaFields, entry) {
@@ -769,6 +882,71 @@ async function autoConfigureProwlarrApplications(cfg, onProgress) {
   await retryAsync(() => triggerProwlarrAppIndexerSync(cfg, onProgress, true), 8, 2500);
 }
 
+async function waitForAppReady(appName, cfg, onProgress) {
+  if (!appName || !cfg?.[appName]?.enabled) return;
+
+  const checks = {
+    sonarr: async () => testArr(getInternalServiceUrl(cfg, 'sonarr'), cfg.sonarr.apiKey),
+    radarr: async () => testArr(getInternalServiceUrl(cfg, 'radarr'), cfg.radarr.apiKey),
+    prowlarr: async () => testProwlarr(getInternalServiceUrl(cfg, 'prowlarr'), cfg.prowlarr.apiKey),
+    sabnzbd: async () => testSab(getInternalServiceUrl(cfg, 'sabnzbd'), cfg.sabnzbd.apiKey)
+  };
+
+  const check = checks[appName];
+  if (!check) return;
+
+  const hasApiKey = !!cfg?.[appName]?.apiKey;
+  if (!hasApiKey) return;
+
+  if (onProgress) onProgress(`Waiting for ${appName} API to become ready...`);
+  await retryAsync(check, 24, 2500);
+}
+
+async function relinkAppsWithProgress(appName = null, onProgress) {
+  const cfg = await syncEnabledAppsFromContainers(readEffectiveConfig({ persist: true }));
+
+  if (cfg?.sabnzbd?.enabled) {
+    const sabUpdated = ensureSabHostWhitelist();
+    if (sabUpdated) {
+      if (onProgress) onProgress('Updated SABnzbd host whitelist for container-to-container access. Restarting SABnzbd...');
+      await docker.getContainer('sabnzbd').restart();
+    }
+  }
+
+  if (appName) {
+    await waitForAppReady(appName, cfg, onProgress);
+  }
+
+  if (cfg?.prowlarr?.enabled && cfg?.prowlarr?.apiKey) {
+    await waitForAppReady('prowlarr', cfg, onProgress);
+  }
+
+  if (cfg?.sabnzbd?.enabled && cfg?.sabnzbd?.apiKey && cfg?.newshosting?.enabled) {
+    await waitForAppReady('sabnzbd', cfg, onProgress);
+  }
+
+  if (cfg?.sabnzbd?.enabled && cfg?.sabnzbd?.apiKey) {
+    await ensureSabCategories(cfg, onProgress);
+  }
+
+  if (cfg?.prowlarr?.enabled && cfg?.prowlarr?.apiKey && cfg?.sabnzbd?.enabled && cfg?.sabnzbd?.apiKey) {
+    if (onProgress) onProgress('Linking SABnzbd in Prowlarr...');
+    await upsertProwlarrDownloadClient(cfg);
+  }
+
+  if (onProgress) onProgress('Relinking deployed app integrations...');
+  await applyIntegrationsWithProgress(cfg, appName, onProgress);
+
+  if (cfg?.prowlarr?.enabled && cfg?.prowlarr?.apiKey) {
+    if (onProgress) onProgress('Triggering Prowlarr indexer sync for linked apps...');
+    await triggerProwlarrAppIndexerSync(cfg, onProgress, true);
+  } else if (onProgress) {
+    onProgress('Skipping Prowlarr relink (Prowlarr disabled or API key missing).');
+  }
+
+  return cfg;
+}
+
 async function triggerProwlarrAppIndexerSync(cfg, onProgress, forceSync = true) {
   if (!cfg?.prowlarr?.enabled || !cfg?.prowlarr?.apiKey) return;
 
@@ -845,6 +1023,31 @@ async function getContainerStatuses() {
       image: c.Image
     };
   });
+}
+
+async function syncEnabledAppsFromContainers(cfg) {
+  const all = await withTimeout(docker.listContainers({ all: true }), 4000, 'docker.listContainers');
+  const present = new Set();
+
+  for (const container of all) {
+    for (const rawName of container.Names || []) {
+      present.add(String(rawName || '').replace(/^\//, ''));
+    }
+  }
+
+  let changed = false;
+  for (const name of TARGET_CONTAINERS) {
+    if (present.has(name) && cfg?.[name] && !cfg[name].enabled) {
+      cfg[name].enabled = true;
+      changed = true;
+    }
+  }
+
+  if (changed) {
+    writeConfig(cfg);
+  }
+
+  return cfg;
 }
 
 function normalizeConfig(config) {
@@ -1357,11 +1560,13 @@ function startOperationJob(operation, config, appName = null) {
       const cfg = normalizeConfig(config);
       if (operation === 'restart') {
         await restartAppsWithProgress(cfg, appName, pushDeployLog);
+        pushDeployLog('Running automatic post-restart app relink...');
+        await relinkAppsWithProgress(appName, pushDeployLog);
       } else if (appName) {
         await installOrUpdateSingleAppWithProgress(cfg, appName, pushDeployLog);
 
-        pushDeployLog('Running automatic post-deploy app configuration...');
-        await applyIntegrationsWithProgress(cfg, appName, pushDeployLog);
+        pushDeployLog('Running automatic post-deploy app relink...');
+        await relinkAppsWithProgress(appName, pushDeployLog);
       } else {
         throw new Error(`Unsupported operation: ${operation}`);
       }
@@ -1528,60 +1733,8 @@ app.post('/api/test/:appName', async (req, res) => {
 
 app.post('/api/apply', async (req, res) => {
   try {
-    const cfg = readEffectiveConfig({ persist: true });
-    const canSonarr = !!cfg.sonarr?.apiKey;
-    const canRadarr = !!cfg.radarr?.apiKey;
-    const canSab = !!cfg.sabnzbd?.apiKey;
-    const canProwlarr = !!cfg.prowlarr?.apiKey;
-    const warnings = [];
-
-    if (cfg.newshosting.enabled && canSab) {
-      try {
-        await upsertSabNewshostingServer(cfg);
-      } catch (e) {
-        warnings.push(`SAB Newshosting skipped: ${e.message}`);
-      }
-    }
-
-    if (canSonarr) {
-      try {
-        await ensureRootFolder('sonarr', cfg);
-      } catch (e) {
-        warnings.push(`Sonarr root folder skipped: ${e.message}`);
-      }
-      if (canProwlarr) await upsertProwlarrApplication('sonarr', cfg);
-      if (canProwlarr) await upsertArrProwlarrIndexer('sonarr', cfg);
-      if (canSab) {
-        try {
-          await upsertArrDownloadClient('sonarr', cfg);
-        } catch (e) {
-          warnings.push(`Sonarr SAB downloader skipped: ${e.message}`);
-        }
-      }
-    }
-
-    if (canRadarr) {
-      try {
-        await ensureRootFolder('radarr', cfg);
-      } catch (e) {
-        warnings.push(`Radarr root folder skipped: ${e.message}`);
-      }
-      if (canProwlarr) await upsertProwlarrApplication('radarr', cfg);
-      if (canProwlarr) await upsertArrProwlarrIndexer('radarr', cfg);
-      if (canSab) {
-        try {
-          await upsertArrDownloadClient('radarr', cfg);
-        } catch (e) {
-          warnings.push(`Radarr SAB downloader skipped: ${e.message}`);
-        }
-      }
-    }
-
-    if (canProwlarr) {
-      await triggerProwlarrAppIndexerSync(cfg, pushDeployLog, true);
-    }
-
-    res.json({ ok: true, message: 'Applied settings to detected apps (SAB + Arr + Prowlarr)', warnings });
+    await relinkAppsWithProgress(null, pushDeployLog);
+    res.json({ ok: true, message: 'Relinked deployed apps and refreshed Prowlarr/SAB/Arr integration.' });
   } catch (e) {
     const upstreamStatus = e?.response?.status;
     const upstreamData = e?.response?.data;
@@ -1724,10 +1877,9 @@ app.post('/container/:name/:action', async (req, res) => {
         }
       });
 
-      if (name === 'prowlarr' || name === 'sonarr' || name === 'radarr') {
-        const refreshed = readEffectiveConfig({ persist: true });
-        const targetApp = name === 'prowlarr' ? null : name;
-        await applyIntegrationsWithProgress(refreshed, targetApp);
+      const targetApp = ['sonarr', 'radarr'].includes(name) ? name : null;
+      if (['prowlarr', 'sonarr', 'radarr', 'sabnzbd'].includes(name)) {
+        await relinkAppsWithProgress(targetApp);
       }
     } else if (action === 'stop') {
       const container = docker.getContainer(name);

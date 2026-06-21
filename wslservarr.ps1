@@ -53,7 +53,13 @@ function Invoke-Wsl {
     $normalizedScript = "export HOME=/root`n$normalizedScript"
     $encoded = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($normalizedScript))
     $cmd = "echo $encoded | base64 -d | bash"
-    $output = & wsl -d $Distro -u root -- bash -lc $cmd 2>&1
+    $previousErrorActionPreference = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    try {
+        $output = & wsl -d $Distro -u root -- bash -lc $cmd 2>&1
+    } finally {
+        $ErrorActionPreference = $previousErrorActionPreference
+    }
     if ($output) {
         $output | ForEach-Object { Write-Host $_ }
     }
@@ -80,7 +86,13 @@ function Invoke-WslCapture {
     $normalizedScript = "export HOME=/root`n$normalizedScript"
     $encoded = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($normalizedScript))
     $cmd = "echo $encoded | base64 -d | bash"
-    $output = & wsl -d $Distro -u root -- bash -lc $cmd 2>&1
+    $previousErrorActionPreference = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    try {
+        $output = & wsl -d $Distro -u root -- bash -lc $cmd 2>&1
+    } finally {
+        $ErrorActionPreference = $previousErrorActionPreference
+    }
     if ($LASTEXITCODE -ne 0) {
         $normalizedOutput = ($output | Out-String)
         if ($normalizedOutput -match 'Synchronizing state of docker\.service') {
@@ -117,12 +129,17 @@ function Sync-LocalUiToWsl {
         throw "Local UI source folder not found: $uiSource"
     }
 
-    Write-Host "  Syncing UI folder with tar stream: $uiSource" -ForegroundColor DarkGray
-    & wsl -d $Distro -u root -- bash -lc "rm -rf /opt/wslservarr/src/wslservarr-ui && mkdir -p /opt/wslservarr/src"
-    tar -C $SourceRoot -cf - wslservarr-ui | wsl -d $Distro -u root -- bash -lc "tar -xf - -C /opt/wslservarr/src"
-    if ($LASTEXITCODE -ne 0) {
-        throw "tar sync failed with exit code $LASTEXITCODE"
+    $wslParent = "\\wsl$\$Distro\opt\wslservarr\src"
+    $wslDestination = Join-Path $wslParent 'wslservarr-ui'
+
+    Write-Host "  Syncing UI folder from local workspace: $uiSource" -ForegroundColor DarkGray
+    & wsl -d $Distro -u root -- bash -lc "mkdir -p /opt/wslservarr/src && rm -rf /opt/wslservarr/src/wslservarr-ui"
+
+    if (Test-Path $wslDestination) {
+        Remove-Item -LiteralPath $wslDestination -Recurse -Force
     }
+
+    Copy-Item -LiteralPath $uiSource -Destination $wslParent -Recurse -Force
 }
 
 function Test-RunningAsAdministrator {
@@ -538,9 +555,17 @@ if ($Action -eq "Setup") {
         Write-Host "[2/7] Preparing new installation..."
     }
 
+    if (Test-Path -LiteralPath $InstallPath) {
+        Write-Host "[2/7] Removing stale install path '$InstallPath'..." -ForegroundColor DarkGray
+        Remove-Item -LiteralPath $InstallPath -Recurse -Force -ErrorAction SilentlyContinue
+    }
+
     Write-Host "[3/7] Importing dedicated distro '$DistroName'..."
     New-Item -ItemType Directory -Path $InstallPath -Force | Out-Null
     & wsl --import $DistroName $InstallPath $RootFsTar --version 2
+    if ($LASTEXITCODE -ne 0) {
+        throw "Failed to import distro '$DistroName' into '$InstallPath'."
+    }
 
     Write-Host "[4/7] Bootstrapping base Linux user + systemd..."
     $bootstrapSystemd = @'
@@ -704,7 +729,11 @@ COMPOSEOF
 
 cd /opt/wslservarr
 docker compose pull
-docker compose up -d --build
+if [ "$setupUsesLocalUi" = "1" ]; then
+    echo "Deferring UI build until local dev sources are synced"
+else
+    docker compose up -d --build
+fi
 
 # Ensure distro stays running
 systemctl set-default multi-user.target
