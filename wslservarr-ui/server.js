@@ -357,6 +357,19 @@ function writeConfig(config) {
   fs.writeFileSync(CONFIG_PATH, JSON.stringify(next, null, 2));
 }
 
+function readEffectiveConfig({ persist = false } = {}) {
+  const raw = readConfig();
+  const normalizedRaw = normalizeConfig(raw);
+  const merged = mergeDiscoveredApiKeys(raw);
+  const normalizedMerged = normalizeConfig(merged);
+
+  if (persist && JSON.stringify(normalizedRaw) !== JSON.stringify(normalizedMerged)) {
+    writeConfig(normalizedMerged);
+  }
+
+  return normalizedMerged;
+}
+
 function apiClient(baseUrl, apiKey) {
   return axios.create({
     baseURL: baseUrl,
@@ -589,38 +602,18 @@ async function upsertArrProwlarrIndexer(appName, cfg) {
   if (!cfg?.prowlarr?.enabled || !cfg?.prowlarr?.apiKey) return;
 
   const client = apiClient(getInternalServiceUrl(cfg, appName === 'sonarr' ? 'sonarr' : 'radarr'), arr.apiKey);
-  const schemaRes = await client.get('/api/v3/indexer/schema');
-  const schema = (schemaRes.data || []).find(s => String(s.implementationName || '').toLowerCase().includes('prowlarr'));
-  if (!schema) throw new Error(`${appName}: Prowlarr indexer schema not found`);
-
   const listRes = await client.get('/api/v3/indexer');
   const existingList = Array.isArray(listRes.data) ? listRes.data : [];
-  const existing = existingList.find(ix => String(ix.implementationName || '').toLowerCase().includes('prowlarr'));
-
-  const fields = (schema.fields || []).map(f => {
-    const next = { ...f };
-    if (f.name === 'prowlarrUrl' || f.name === 'baseUrl' || f.name === 'url') next.value = getInternalServiceUrl(cfg, 'prowlarr');
-    if (f.name === 'apiKey') next.value = cfg.prowlarr.apiKey;
-    return next;
+  const stale = existingList.filter((ix) => {
+    if (String(ix.name || '').toLowerCase() !== 'prowlarr') return false;
+    return String(ix.implementationName || '').toLowerCase() === 'torznab'
+      || String(ix.implementationName || '').toLowerCase() === 'newznab';
   });
 
-  const payload = {
-    ...(existing || {}),
-    enable: true,
-    name: 'Prowlarr',
-    implementation: schema.implementation,
-    implementationName: schema.implementationName,
-    configContract: schema.configContract,
-    protocol: schema.protocol || existing?.protocol || 'usenet',
-    priority: Number(existing?.priority || 25),
-    fields,
-    tags: existing?.tags || []
-  };
-
-  if (existing?.id) {
-    await client.put(`/api/v3/indexer/${existing.id}`, payload);
-  } else {
-    await client.post('/api/v3/indexer', payload);
+  for (const ix of stale) {
+    if (ix?.id) {
+      await client.delete(`/api/v3/indexer/${ix.id}`);
+    }
   }
 }
 
@@ -714,7 +707,11 @@ async function applyIntegrationsWithProgress(cfg, appName = null, onProgress) {
 
   if (cfg.newshosting?.enabled) {
     if (onProgress) onProgress('Applying Newshosting server to SABnzbd...');
-    await retryAsync(() => upsertSabNewshostingServer(cfg), 8, 2500);
+    try {
+      await retryAsync(() => upsertSabNewshostingServer(cfg), 8, 2500);
+    } catch (e) {
+      if (onProgress) onProgress(`Warning: SAB Newshosting auto-config skipped: ${e.message}`);
+    }
   }
 
   for (const app of appTargets) {
@@ -725,7 +722,11 @@ async function applyIntegrationsWithProgress(cfg, appName = null, onProgress) {
     }
 
     if (onProgress) onProgress(`Applying ${app} root folder...`);
-    await retryAsync(() => ensureRootFolder(app, cfg), 8, 2500);
+    try {
+      await retryAsync(() => ensureRootFolder(app, cfg), 8, 2500);
+    } catch (e) {
+      if (onProgress) onProgress(`Warning: ${app} root folder setup skipped: ${e.message}`);
+    }
 
     if (cfg.prowlarr?.enabled && cfg.prowlarr?.apiKey) {
       if (onProgress) onProgress(`Applying Prowlarr application for ${app}...`);
@@ -739,7 +740,11 @@ async function applyIntegrationsWithProgress(cfg, appName = null, onProgress) {
 
     if (cfg.sabnzbd?.enabled && cfg.sabnzbd?.apiKey) {
       if (onProgress) onProgress(`Applying ${app} download client (SABnzbd)...`);
-      await retryAsync(() => upsertArrDownloadClient(app, cfg), 8, 2500);
+      try {
+        await retryAsync(() => upsertArrDownloadClient(app, cfg), 8, 2500);
+      } catch (e) {
+        if (onProgress) onProgress(`Warning: ${app} SAB downloader setup skipped: ${e.message}`);
+      }
     } else if (onProgress) {
       onProgress(`Skipping ${app} SABnzbd downloader setup (SAB disabled or API key missing).`);
     }
@@ -767,8 +772,22 @@ async function autoConfigureProwlarrApplications(cfg, onProgress) {
 async function triggerProwlarrAppIndexerSync(cfg, onProgress, forceSync = true) {
   if (!cfg?.prowlarr?.enabled || !cfg?.prowlarr?.apiKey) return;
 
-  if (onProgress) onProgress('Triggering Prowlarr app indexer sync...');
   const client = apiClient(getInternalServiceUrl(cfg, 'prowlarr'), cfg.prowlarr.apiKey);
+  let indexers = [];
+  try {
+    const list = await client.get('/api/v1/indexer');
+    indexers = Array.isArray(list.data) ? list.data : [];
+  } catch {
+    indexers = [];
+  }
+
+  const enabledIndexerCount = indexers.filter((ix) => ix?.enable !== false).length;
+  if (enabledIndexerCount === 0) {
+    if (onProgress) onProgress('Skipping Prowlarr app indexer sync because no Prowlarr indexers are configured yet.');
+    return;
+  }
+
+  if (onProgress) onProgress('Triggering Prowlarr app indexer sync...');
   const res = await client.post('/api/v1/command', {
     name: 'ApplicationIndexerSync',
     forceSync: !!forceSync
@@ -782,6 +801,21 @@ async function triggerProwlarrAppIndexerSync(cfg, onProgress, forceSync = true) 
 async function ensureRootFolder(appName, cfg) {
   const arr = appName === 'sonarr' ? cfg.sonarr : cfg.radarr;
   const rootPath = appName === 'sonarr' ? arr.tvRoot : arr.movieRoot;
+
+  if (typeof rootPath === 'string' && rootPath.trim()) {
+    const trimmed = rootPath.trim();
+    let hostPath = trimmed;
+    if (trimmed === '/media' || trimmed.startsWith('/media/')) {
+      hostPath = `/mnt/media${trimmed.slice('/media'.length)}`;
+    } else if (trimmed === '/downloads' || trimmed.startsWith('/downloads/')) {
+      hostPath = `/mnt/downloads${trimmed.slice('/downloads'.length)}`;
+    }
+    try {
+      fs.mkdirSync(hostPath, { recursive: true });
+    } catch {
+      // ignore local fs mkdir errors and let Arr API validation report if needed
+    }
+  }
   
   const client = apiClient(getInternalServiceUrl(cfg, appName === 'sonarr' ? 'sonarr' : 'radarr'), arr.apiKey);
   const list = await client.get('/api/v3/rootfolder');
@@ -1430,7 +1464,7 @@ app.post('/api/discover-keys', (req, res) => {
 
 app.post('/api/compose', (req, res) => {
   try {
-    const cfg = normalizeConfig(readConfig());
+    const cfg = readEffectiveConfig({ persist: true });
     cfg.composeYaml = typeof req.body.composeYaml === 'string' ? req.body.composeYaml : cfg.composeYaml;
     writeConfig(cfg);
     res.json({ ok: true, composeYaml: cfg.composeYaml });
@@ -1445,7 +1479,7 @@ app.get('/api/yaml/:appName', (req, res) => {
     return res.status(400).json({ ok: false, error: 'Unknown app' });
   }
 
-  const cfg = normalizeConfig(readConfig());
+  const cfg = readEffectiveConfig({ persist: true });
   const serviceYaml = getAppServiceYaml(cfg, appName);
 
   return res.json({ ok: true, appName, serviceYaml });
@@ -1463,7 +1497,7 @@ app.post('/api/yaml/:appName', (req, res) => {
       return res.status(400).json({ ok: false, error: 'serviceYaml is required' });
     }
 
-    const cfg = normalizeConfig(readConfig());
+    const cfg = readEffectiveConfig({ persist: true });
     cfg[appName].composeYaml = normalizeServiceYamlBlock(appName, raw);
     syncAppConfigFromServiceYaml(cfg, appName, cfg[appName].composeYaml);
     cfg.composeYaml = buildComposeFromIndependentYaml(cfg);
@@ -1477,7 +1511,7 @@ app.post('/api/yaml/:appName', (req, res) => {
 
 app.post('/api/test/:appName', async (req, res) => {
   try {
-    const cfg = normalizeConfig(readConfig());
+    const cfg = readEffectiveConfig({ persist: true });
     const appName = req.params.appName;
     if (appName === 'sonarr') await testArr(cfg.sonarr.url, cfg.sonarr.apiKey);
     else if (appName === 'radarr') await testArr(cfg.radarr.url, cfg.radarr.apiKey);
@@ -1494,37 +1528,67 @@ app.post('/api/test/:appName', async (req, res) => {
 
 app.post('/api/apply', async (req, res) => {
   try {
-    const cfg = normalizeConfig(readConfig());
+    const cfg = readEffectiveConfig({ persist: true });
     const canSonarr = !!cfg.sonarr?.apiKey;
     const canRadarr = !!cfg.radarr?.apiKey;
     const canSab = !!cfg.sabnzbd?.apiKey;
     const canProwlarr = !!cfg.prowlarr?.apiKey;
+    const warnings = [];
 
     if (cfg.newshosting.enabled && canSab) {
-      await upsertSabNewshostingServer(cfg);
+      try {
+        await upsertSabNewshostingServer(cfg);
+      } catch (e) {
+        warnings.push(`SAB Newshosting skipped: ${e.message}`);
+      }
     }
 
     if (canSonarr) {
-      await ensureRootFolder('sonarr', cfg);
+      try {
+        await ensureRootFolder('sonarr', cfg);
+      } catch (e) {
+        warnings.push(`Sonarr root folder skipped: ${e.message}`);
+      }
       if (canProwlarr) await upsertProwlarrApplication('sonarr', cfg);
       if (canProwlarr) await upsertArrProwlarrIndexer('sonarr', cfg);
-      if (canSab) await upsertArrDownloadClient('sonarr', cfg);
+      if (canSab) {
+        try {
+          await upsertArrDownloadClient('sonarr', cfg);
+        } catch (e) {
+          warnings.push(`Sonarr SAB downloader skipped: ${e.message}`);
+        }
+      }
     }
 
     if (canRadarr) {
-      await ensureRootFolder('radarr', cfg);
+      try {
+        await ensureRootFolder('radarr', cfg);
+      } catch (e) {
+        warnings.push(`Radarr root folder skipped: ${e.message}`);
+      }
       if (canProwlarr) await upsertProwlarrApplication('radarr', cfg);
       if (canProwlarr) await upsertArrProwlarrIndexer('radarr', cfg);
-      if (canSab) await upsertArrDownloadClient('radarr', cfg);
+      if (canSab) {
+        try {
+          await upsertArrDownloadClient('radarr', cfg);
+        } catch (e) {
+          warnings.push(`Radarr SAB downloader skipped: ${e.message}`);
+        }
+      }
     }
 
     if (canProwlarr) {
       await triggerProwlarrAppIndexerSync(cfg, pushDeployLog, true);
     }
 
-    res.json({ ok: true, message: 'Applied settings to detected apps (SAB + Arr + Prowlarr)' });
+    res.json({ ok: true, message: 'Applied settings to detected apps (SAB + Arr + Prowlarr)', warnings });
   } catch (e) {
-    res.status(500).json({ ok: false, error: `Apply failed: ${e.message}` });
+    const upstreamStatus = e?.response?.status;
+    const upstreamData = e?.response?.data;
+    const detail = upstreamStatus
+      ? ` (upstream ${upstreamStatus}${upstreamData ? `: ${typeof upstreamData === 'string' ? upstreamData : JSON.stringify(upstreamData)}` : ''})`
+      : '';
+    res.status(500).json({ ok: false, error: `Apply failed: ${e.message}${detail}` });
   }
 });
 
@@ -1535,7 +1599,7 @@ app.post('/api/install/apps/:appName/start', (req, res) => {
       return res.status(400).json({ ok: false, error: 'Unknown app', state: deployState });
     }
 
-    const cfg = normalizeConfig(readConfig());
+    const cfg = readEffectiveConfig({ persist: true });
     startDeployJob(cfg, appName);
     return res.json({ ok: true, state: deployState });
   } catch (e) {
@@ -1545,7 +1609,7 @@ app.post('/api/install/apps/:appName/start', (req, res) => {
 
 app.post('/api/install/apps/restart', (req, res) => {
   try {
-    const cfg = normalizeConfig(readConfig());
+    const cfg = readEffectiveConfig({ persist: true });
     startRestartJob(cfg);
     return res.json({ ok: true, state: deployState });
   } catch (e) {
@@ -1560,7 +1624,7 @@ app.post('/api/install/apps/:appName/restart', (req, res) => {
       return res.status(400).json({ ok: false, error: 'Unknown app', state: deployState });
     }
 
-    const cfg = normalizeConfig(readConfig());
+    const cfg = readEffectiveConfig({ persist: true });
     startRestartJob(cfg, appName);
     return res.json({ ok: true, state: deployState });
   } catch (e) {
@@ -1637,7 +1701,7 @@ app.post('/container/:name/:action', async (req, res) => {
 
   try {
     if (action === 'start' || action === 'restart') {
-      const cfg = normalizeConfig(readConfig());
+      const cfg = readEffectiveConfig({ persist: true });
       if (!cfg[name]?.enabled) {
         cfg[name].enabled = true;
         writeConfig(cfg);
@@ -1661,7 +1725,7 @@ app.post('/container/:name/:action', async (req, res) => {
       });
 
       if (name === 'prowlarr' || name === 'sonarr' || name === 'radarr') {
-        const refreshed = normalizeConfig(readConfig());
+        const refreshed = readEffectiveConfig({ persist: true });
         const targetApp = name === 'prowlarr' ? null : name;
         await applyIntegrationsWithProgress(refreshed, targetApp);
       }
@@ -1684,7 +1748,7 @@ app.listen(PORT, () => {
 
   setTimeout(() => {
     try {
-      const cfg = normalizeConfig(readConfig());
+      const cfg = readEffectiveConfig({ persist: true });
       autoConfigureProwlarrApplications(cfg).catch((e) => {
         console.warn(`Prowlarr auto-config failed: ${e.message}`);
       });
