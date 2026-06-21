@@ -1,4 +1,4 @@
-﻿[CmdletBinding(SupportsShouldProcess = $true)]
+﻿﻿[CmdletBinding(SupportsShouldProcess = $true)]
 param(
     [ValidateSet("Run", "Setup", "Uninstall", "Update", "Reinstall", "RestartAll", "Startup")]
     [string]$Action,
@@ -1233,4 +1233,5 @@ elseif ($Action -eq "Uninstall") {
         }
     }
 }
+
 

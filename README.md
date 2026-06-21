@@ -162,7 +162,9 @@ These are mounted in WSL as:
 
 Setup asks whether WSLServarr should start automatically when you sign in to Windows.
 
-If you choose yes, the script creates a scheduled task named **WSLServarr Startup** that runs at sign-in for the Windows user who owns the WSL distro.
+If you choose yes, the script copies its launcher into your Windows `wslservarr` root folder and creates a scheduled task named **WSLServarr Startup** that runs at sign-in for the Windows user who owns the WSL distro.
+
+The scheduled task starts from that installed launcher location, not from the original checkout folder, and it leaves the PowerShell window visible while it runs.
 
 You can change this later at any time with:
 
@@ -225,12 +227,12 @@ C:\wslservarr
 
 ### WSL distro / VHDX location
 
-By default, the WSL distro install path follows the drive you choose for the Windows data root.
+By default, the WSL distro install path lives under the Windows data root you choose.
 
 Examples:
 
-- If your root is `C:\wslservarr`, the distro path defaults to `C:\WSL\wslservarr-wsl`
-- If your root is `D:\wslservarr`, the distro path defaults to `D:\WSL\wslservarr-wsl`
+- If your root is `C:\wslservarr`, the distro path defaults to `C:\wslservarr\wslservarr-wsl`
+- If your root is `D:\wslservarr`, the distro path defaults to `D:\wslservarr\wslservarr-wsl`
 
 The actual WSL virtual disk is typically:
 
