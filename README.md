@@ -18,7 +18,7 @@ The installer script:
 2. Installs Docker Engine and Docker Compose inside that distro
 3. Creates and mounts Windows folders for config, media, and downloads
 4. Deploys the WSLServarr web UI on port `5055`
-5. Optionally registers WSLServarr to start automatically with Windows
+5. Optionally registers WSLServarr to start automatically when you sign in to Windows
 6. Lets the web UI deploy and configure the app stack from one place
 7. Checks GitHub for a newer `wslservarr.ps1` and updates the local script before continuing
 
@@ -158,11 +158,11 @@ These are mounted in WSL as:
 /mnt/downloads
 ```
 
-### 5. Choose whether WSLServarr starts with Windows
+### 5. Choose whether WSLServarr starts when you sign in
 
-Setup asks whether Windows auto-start should be enabled.
+Setup asks whether WSLServarr should start automatically when you sign in to Windows.
 
-If you choose yes, the script creates a scheduled task named **WSLServarr Startup**.
+If you choose yes, the script creates a scheduled task named **WSLServarr Startup** that runs at sign-in for the Windows user who owns the WSL distro.
 
 You can change this later at any time with:
 
@@ -192,6 +192,8 @@ Default UI URL:
 - http://localhost:5055
 
 If LAN forwarding is active, the UI also becomes reachable from other devices on your network by your Windows host IP.
+
+If you use a third-party firewall or security suite such as McAfee, Norton, or Bitdefender, it may still block inbound LAN access even when the Windows Firewall rules created by WSLServarr are correct. If remote devices time out, check the third-party firewall and add allow rules for the WSLServarr ports.
 
 ### 8. Complete first-run app setup in the UI
 
@@ -403,6 +405,7 @@ wsl -d wslservarr-wsl mount | grep /mnt
 - **Port already in use**: stop the conflicting app or change the configured port in the web UI
 - **Rootfs download problems**: provide `-RootFsTar` manually or verify internet access
 - **App not reachable on LAN**: rerun `Run` or `RestartAll` as Administrator so firewall and portproxy rules can be refreshed
+- **App not reachable on LAN even though localhost works**: check any third-party firewall or security suite, because it may still block inbound TCP traffic on ports `5055`, `8080`, `8989`, `7878`, `9696`, or `8096` after Windows Firewall and `portproxy` are already configured
 
 ## Repository layout
 

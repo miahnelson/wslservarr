@@ -125,7 +125,7 @@ function App() {
       }
       if (data.deployState) {
         setDeployState(data.deployState);
-        if (data.deployState.running || (data.deployState.logs || []).length || data.deployState.error) {
+          if (data.deployState.running || data.deployState.error || data.deployState.success === false) {
           setShowDeployOutput(true);
         }
       }
