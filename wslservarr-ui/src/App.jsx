@@ -32,6 +32,18 @@ function isLoopbackHost(hostname) {
   return !host || host === 'localhost' || host === '127.0.0.1' || host === '::1';
 }
 
+function isDockerBridgeHost(hostname) {
+  const host = String(hostname || '').trim();
+  if (!host) return false;
+
+  const dockerRanges = [
+    '172.17.', '172.18.', '172.19.', '172.20.', '172.21.', '172.22.',
+    '172.23.', '172.24.', '172.25.', '172.26.', '172.27.', '172.28.',
+    '172.29.', '172.30.', '172.31.'
+  ];
+  return dockerRanges.some((prefix) => host.startsWith(prefix));
+}
+
 async function discoverLanIpv4() {
   if (typeof window === 'undefined') return '';
   const RTCPeerConnectionCtor = window.RTCPeerConnection || window.webkitRTCPeerConnection || window.mozRTCPeerConnection;
@@ -120,7 +132,7 @@ function App() {
       const next = mergeConfig(data.config);
       setConfig(next);
       setContainers(Array.isArray(data.containers) ? data.containers : []);
-      if (data.networkHost && !isLoopbackHost(data.networkHost)) {
+      if (data.networkHost && !isLoopbackHost(data.networkHost) && !isDockerBridgeHost(data.networkHost)) {
         setNetworkHost(String(data.networkHost).trim());
       }
       if (data.deployState) {
@@ -162,9 +174,9 @@ function App() {
 
     const detectNetworkHost = async () => {
       if (typeof window === 'undefined') return;
-      if (networkHost && !isLoopbackHost(networkHost)) return;
+      if (networkHost && !isLoopbackHost(networkHost) && !isDockerBridgeHost(networkHost)) return;
       const currentHost = window.location.hostname;
-      if (!isLoopbackHost(currentHost)) {
+      if (!isLoopbackHost(currentHost) && !isDockerBridgeHost(currentHost)) {
         if (!cancelled) setNetworkHost(currentHost);
         return;
       }

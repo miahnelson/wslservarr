@@ -381,8 +381,23 @@ function getPreferredLanIpv4() {
     }
   }
 
-  const preferred = candidates.find((ip) => ip.startsWith('192.168.') || ip.startsWith('10.') || ip.startsWith('172.16.') || ip.startsWith('172.17.') || ip.startsWith('172.'));
-  return preferred || candidates[0] || '';
+  const isDockerBridgeLike = (ip) => {
+    if (!ip) return false;
+    if (ip.startsWith('172.17.') || ip.startsWith('172.18.') || ip.startsWith('172.19.')) return true;
+    if (ip.startsWith('172.20.') || ip.startsWith('172.21.') || ip.startsWith('172.22.') || ip.startsWith('172.23.')) return true;
+    if (ip.startsWith('172.24.') || ip.startsWith('172.25.') || ip.startsWith('172.26.') || ip.startsWith('172.27.')) return true;
+    if (ip.startsWith('172.28.') || ip.startsWith('172.29.') || ip.startsWith('172.30.') || ip.startsWith('172.31.')) return true;
+    return false;
+  };
+
+  const preferred = candidates.find((ip) => ip.startsWith('192.168.') || ip.startsWith('10.'));
+  if (preferred) return preferred;
+
+  const secondary = candidates.find((ip) => ip.startsWith('172.16.') && !isDockerBridgeLike(ip));
+  if (secondary) return secondary;
+
+  const fallback = candidates.find((ip) => !isDockerBridgeLike(ip));
+  return fallback || '';
 }
 
 function apiClient(baseUrl, apiKey) {
@@ -434,10 +449,19 @@ async function testJellyfin(url, apiKey) {
   const base = `${String(url || '').replace(/\/$/, '')}`;
   const headers = {};
   if (apiKey) headers['X-Emby-Token'] = apiKey;
-  const res = await axios.get(`${base}/System/Info/Public`, {
-    timeout: 10000,
-    headers
-  });
+  let res;
+  try {
+    res = await axios.get(`${base}/System/Info/Public`, {
+      timeout: 10000,
+      headers
+    });
+  } catch (e) {
+    const code = String(e?.code || '').trim();
+    if (code === 'ECONNREFUSED') {
+      throw new Error(`Jellyfin is not reachable yet at ${base}`);
+    }
+    throw e;
+  }
   if (!res.data || typeof res.data !== 'object') {
     throw new Error('Invalid Jellyfin response');
   }
@@ -448,10 +472,19 @@ async function getJellyfinPublicSystemInfo(url, apiKey) {
   const base = `${String(url || '').replace(/\/$/, '')}`;
   const headers = {};
   if (apiKey) headers['X-Emby-Token'] = apiKey;
-  const res = await axios.get(`${base}/System/Info/Public`, {
-    timeout: 10000,
-    headers
-  });
+  let res;
+  try {
+    res = await axios.get(`${base}/System/Info/Public`, {
+      timeout: 10000,
+      headers
+    });
+  } catch (e) {
+    const code = String(e?.code || '').trim();
+    if (code === 'ECONNREFUSED') {
+      throw new Error(`Jellyfin is not reachable yet at ${base}`);
+    }
+    throw e;
+  }
   if (!res.data || typeof res.data !== 'object') {
     throw new Error('Invalid Jellyfin public system info response');
   }
@@ -953,8 +986,45 @@ async function waitForAppReady(appName, cfg, onProgress) {
   await retryAsync(check, 24, 2500);
 }
 
+async function ensureApiKeysReady(cfg, appNames, onProgress) {
+  const targets = (appNames || [])
+    .filter((name) => !!name)
+    .filter((name) => cfg?.[name]?.enabled)
+    .filter((name) => !String(cfg?.[name]?.apiKey || '').trim());
+
+  if (!targets.length) {
+    return;
+  }
+
+  if (onProgress) {
+    onProgress(`Waiting for API keys: ${targets.join(', ')}...`);
+  }
+
+  try {
+    await retryAsync(() => {
+      const changed = syncApiKeysFromConfigFiles(cfg);
+      if (changed) {
+        writeConfig(cfg);
+      }
+
+      const remaining = targets.filter((name) => !String(cfg?.[name]?.apiKey || '').trim());
+      if (remaining.length) {
+        throw new Error(`API key(s) not ready for: ${remaining.join(', ')}`);
+      }
+
+      return true;
+    }, 24, 2500);
+  } catch (e) {
+    if (onProgress) {
+      onProgress(`Warning: ${e.message}. Continuing with currently available keys.`);
+    }
+  }
+}
+
 async function relinkAppsWithProgress(appName = null, onProgress) {
   const cfg = await syncEnabledAppsFromContainers(readEffectiveConfig({ persist: true }));
+
+  await ensureApiKeysReady(cfg, ['sabnzbd', 'prowlarr', 'sonarr', 'radarr'], onProgress);
 
   if (cfg?.sabnzbd?.enabled) {
     const sabUpdated = ensureSabHostWhitelist();
@@ -1027,6 +1097,8 @@ async function triggerProwlarrAppIndexerSync(cfg, onProgress, forceSync = true) 
 async function ensureRootFolder(appName, cfg) {
   const arr = appName === 'sonarr' ? cfg.sonarr : cfg.radarr;
   const rootPath = appName === 'sonarr' ? arr.tvRoot : arr.movieRoot;
+  const puid = Number(cfg?.runtime?.puid || 1000);
+  const pgid = Number(cfg?.runtime?.pgid || 1000);
 
   if (typeof rootPath === 'string' && rootPath.trim()) {
     const trimmed = rootPath.trim();
@@ -1038,6 +1110,16 @@ async function ensureRootFolder(appName, cfg) {
     }
     try {
       fs.mkdirSync(hostPath, { recursive: true });
+      try {
+        fs.chownSync(hostPath, puid, pgid);
+      } catch {
+        // Ignore chown failures on host-backed mounts.
+      }
+      try {
+        fs.chmodSync(hostPath, 0o777);
+      } catch {
+        // Ignore chmod failures on host-backed mounts.
+      }
     } catch {
       // ignore local fs mkdir errors and let Arr API validation report if needed
     }
