@@ -21,6 +21,7 @@ param(
     [string]$LinuxUser = "wslservarr",
     [string]$DownloadDir = "$PSScriptRoot\.cache",
     [switch]$SkipSelfUpdate,
+    [switch]$RelaunchedFromDataRoot,
 
     # Uninstall parameters
     [switch]$RemoveDistro,
@@ -30,6 +31,10 @@ param(
 $ErrorActionPreference = "Stop"
 $InstallSettingsPath = Join-Path $PSScriptRoot ".wslservarr-install.json"
 $StartupTaskName = "WSLServarr Startup"
+$ScriptInvocationParameters = @{}
+foreach ($entry in $PSBoundParameters.GetEnumerator()) {
+    $ScriptInvocationParameters[$entry.Key] = $entry.Value
+}
 
 # Resolve dev source path
 if ($DevMode -and -not $LocalSourcePath) {
@@ -54,6 +59,21 @@ function Get-DefaultInstallPathForDataRoot {
     }
 
     return Join-Path (Join-Path $qualifiedRoot 'WSL') $Distro
+}
+
+function Test-PathsEqual {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$LeftPath,
+        [Parameter(Mandatory = $true)]
+        [string]$RightPath
+    )
+
+    return [string]::Equals(
+        [System.IO.Path]::GetFullPath($LeftPath).TrimEnd('\'),
+        [System.IO.Path]::GetFullPath($RightPath).TrimEnd('\'),
+        [System.StringComparison]::OrdinalIgnoreCase
+    )
 }
 
 function Get-SavedInstallSettings {
@@ -153,6 +173,93 @@ function Save-InstallSettings {
     }
 
     $payload | ConvertTo-Json | Set-Content -LiteralPath $InstallSettingsPath -Encoding UTF8
+}
+
+function Invoke-SetupFromDataRoot {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$RootPath
+    )
+
+    if (-not $PSCommandPath) {
+        Write-Warning "Unable to relocate setup because the current script path is unavailable. Continuing in-place."
+        return $false
+    }
+
+    $sourceScriptPath = [System.IO.Path]::GetFullPath($PSCommandPath)
+    $targetScriptPath = Join-Path $RootPath (Split-Path -Path $sourceScriptPath -Leaf)
+    if (Test-PathsEqual -LeftPath $sourceScriptPath -RightPath $targetScriptPath) {
+        return $false
+    }
+
+    $targetSettingsPath = Join-Path $RootPath (Split-Path -Path $InstallSettingsPath -Leaf)
+
+    Write-Host "[Setup] Copying launcher into data root..." -ForegroundColor DarkGray
+    Copy-Item -LiteralPath $sourceScriptPath -Destination $targetScriptPath -Force
+
+    if ((Test-Path -LiteralPath $InstallSettingsPath) -and -not (Test-PathsEqual -LeftPath $InstallSettingsPath -RightPath $targetSettingsPath)) {
+        Copy-Item -LiteralPath $InstallSettingsPath -Destination $targetSettingsPath -Force
+    }
+
+    $powershellExe = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
+    $relaunchArgs = @(
+        '-NoLogo',
+        '-NoProfile',
+        '-ExecutionPolicy', 'Bypass',
+        '-File', $targetScriptPath,
+        '-Action', 'Setup',
+        '-DataRootPath', $RootPath,
+        '-RelaunchedFromDataRoot'
+    )
+
+    if ($ScriptInvocationParameters.ContainsKey('RootFsTar')) {
+        $relaunchArgs += @('-RootFsTar', $RootFsTar)
+    }
+    if ($ScriptInvocationParameters.ContainsKey('TimeZone')) {
+        $relaunchArgs += @('-TimeZone', $TimeZone)
+    }
+    if ($ScriptInvocationParameters.ContainsKey('WebUiRepoUrl')) {
+        $relaunchArgs += @('-WebUiRepoUrl', $WebUiRepoUrl)
+    }
+    if ($ScriptInvocationParameters.ContainsKey('WebUiRepoBranch')) {
+        $relaunchArgs += @('-WebUiRepoBranch', $WebUiRepoBranch)
+    }
+    if ($LocalSourcePath) {
+        $relaunchArgs += @('-LocalSourcePath', $LocalSourcePath)
+    }
+    if ($ScriptInvocationParameters.ContainsKey('RootFsDownloadUrl')) {
+        $relaunchArgs += @('-RootFsDownloadUrl', $RootFsDownloadUrl)
+    }
+    if ($ScriptInvocationParameters.ContainsKey('AutoDownloadRootFs')) {
+        $relaunchArgs += "-AutoDownloadRootFs:$([bool]$AutoDownloadRootFs)"
+    }
+    if ($ForceRecreate) {
+        $relaunchArgs += '-ForceRecreate'
+    }
+    if ($ScriptInvocationParameters.ContainsKey('DistroName')) {
+        $relaunchArgs += @('-DistroName', $DistroName)
+    }
+    if ($ScriptInvocationParameters.ContainsKey('InstallPath')) {
+        $relaunchArgs += @('-InstallPath', $InstallPath)
+    }
+    if ($ScriptInvocationParameters.ContainsKey('LinuxUser')) {
+        $relaunchArgs += @('-LinuxUser', $LinuxUser)
+    }
+    if ($ScriptInvocationParameters.ContainsKey('DownloadDir')) {
+        $relaunchArgs += @('-DownloadDir', $DownloadDir)
+    }
+    if ($SkipSelfUpdate) {
+        $relaunchArgs += '-SkipSelfUpdate'
+    }
+
+    Write-Host "[Setup] Re-running setup from $targetScriptPath" -ForegroundColor DarkGray
+    & $powershellExe @relaunchArgs
+    $relaunchExitCode = $LASTEXITCODE
+    if ($relaunchExitCode -ne 0) {
+        throw "Setup rerun from '$targetScriptPath' failed with exit code $relaunchExitCode."
+    }
+
+    return $true
 }
 
 function Test-WslServarrStartupTaskRegistered {
@@ -683,20 +790,24 @@ if ($Action -eq "Setup") {
         throw "WSL is not available. Install WSL first (wsl --install), reboot, then retry."
     }
 
-    # Interactive Windows root folder selection
-    Write-Host ""
-    Write-Host "=== WSLServarr Setup ===" -ForegroundColor Cyan
-    Write-Host ""
-    Write-Host "Choose a single Windows root folder."
-    Write-Host "The script will create and use these subfolders under it:"
-    Write-Host "  - config"
-    Write-Host "  - media"
-    Write-Host "  - downloads"
-    Write-Host ""
+    if (-not $RelaunchedFromDataRoot) {
+        Write-Host ""
+        Write-Host "=== WSLServarr Setup ===" -ForegroundColor Cyan
+        Write-Host ""
+        Write-Host "Choose a single Windows root folder."
+        Write-Host "The script will create and use these subfolders under it:"
+        Write-Host "  - config"
+        Write-Host "  - media"
+        Write-Host "  - downloads"
+        Write-Host ""
 
-    $selectedRoot = Read-Host "Root folder [$DataRootPath]"
-    if ([string]::IsNullOrWhiteSpace($selectedRoot)) {
+        $selectedRoot = Read-Host "Root folder [$DataRootPath]"
+        if ([string]::IsNullOrWhiteSpace($selectedRoot)) {
+            $selectedRoot = $DataRootPath
+        }
+    } else {
         $selectedRoot = $DataRootPath
+        Write-Host "[Setup] Continuing from launcher under $selectedRoot" -ForegroundColor DarkGray
     }
 
     $dataRootPath = [System.IO.Path]::GetFullPath($selectedRoot)
@@ -731,6 +842,12 @@ if ($Action -eq "Setup") {
     Write-Host "  /mnt/media     (in WSL)"
     Write-Host "  /mnt/downloads (in WSL)"
     Write-Host ""
+
+    if (-not $RelaunchedFromDataRoot) {
+        if (Invoke-SetupFromDataRoot -RootPath $dataRootPath) {
+            exit 0
+        }
+    }
 
     $startupDefaultEnabled = Test-WslServarrStartupTaskRegistered
     $enableStartupWithWindows = Read-WslServarrStartupPreference -DefaultEnabled $startupDefaultEnabled
