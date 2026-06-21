@@ -634,6 +634,80 @@ async function upsertSabNewshostingServer(cfg) {
   }
 }
 
+async function ensureSabDownloadDirectories(cfg, onProgress) {
+  if (!cfg?.sabnzbd?.enabled || !cfg?.sabnzbd?.apiKey) return;
+
+  const puid = Number(cfg?.runtime?.puid || 1000);
+  const pgid = Number(cfg?.runtime?.pgid || 1000);
+  const downloadPaths = ['/mnt/downloads/incomplete', '/mnt/downloads/complete'];
+
+  try {
+    for (const dirPath of downloadPaths) {
+      fs.mkdirSync(dirPath, { recursive: true });
+      try {
+        fs.chownSync(dirPath, puid, pgid);
+      } catch {
+        // Ignore chown failures on host-backed mounts.
+      }
+      try {
+        fs.chmodSync(dirPath, 0o777);
+      } catch {
+        // Ignore chmod failures on host-backed mounts.
+      }
+    }
+  } catch {
+    // Ignore host mkdir failures and let SAB validation surface any path issues.
+  }
+
+  const desired = {
+    download_dir: '/downloads/incomplete',
+    complete_dir: '/downloads/complete'
+  };
+
+  let configUpdated = false;
+  if (fs.existsSync(SABNZBD_CONFIG_PATH)) {
+    let text = fs.readFileSync(SABNZBD_CONFIG_PATH, 'utf8');
+    for (const [keyword, value] of Object.entries(desired)) {
+      const pattern = new RegExp(`^${keyword}\\s*=\\s*.*$`, 'm');
+      const replacement = `${keyword} = ${value}`;
+      if (pattern.test(text)) {
+        const nextText = text.replace(pattern, replacement);
+        if (nextText !== text) {
+          text = nextText;
+          configUpdated = true;
+        }
+      } else {
+        text = `${text.trimEnd()}\n${replacement}\n`;
+        configUpdated = true;
+      }
+    }
+
+    if (configUpdated) {
+      fs.writeFileSync(SABNZBD_CONFIG_PATH, text);
+      if (onProgress) onProgress('Updated SABnzbd download paths in sabnzbd.ini. Restarting SABnzbd...');
+      await docker.getContainer('sabnzbd').restart();
+      await waitForAppReady('sabnzbd', cfg, onProgress);
+    }
+  }
+
+  const sabUrl = getInternalServiceUrl(cfg, 'sabnzbd').replace(/\/$/, '');
+
+  for (const [keyword, value] of Object.entries(desired)) {
+    if (onProgress) onProgress(`Ensuring SABnzbd ${keyword} points to ${value}...`);
+    await axios.post(`${sabUrl}/api`, null, {
+      params: {
+        mode: 'set_config',
+        section: 'misc',
+        keyword,
+        value,
+        apikey: cfg.sabnzbd.apiKey,
+        output: 'json'
+      },
+      timeout: 10000
+    });
+  }
+}
+
 async function ensureSabCategory(cfg, categoryName) {
   const name = String(categoryName || '').trim();
   if (!name) return;
@@ -926,6 +1000,7 @@ async function relinkAppsWithProgress(appName = null, onProgress) {
   }
 
   if (cfg?.sabnzbd?.enabled && cfg?.sabnzbd?.apiKey) {
+    await ensureSabDownloadDirectories(cfg, onProgress);
     await ensureSabCategories(cfg, onProgress);
   }
 
@@ -1221,6 +1296,7 @@ function buildAppsCompose(cfg) {
       - TZ=${tz}
     volumes:
       - /mnt/config/sabnzbd:/config
+      - ${mediaRoot}:/media
       - ${downloadsRoot}:/downloads
     ports:
       - "0.0.0.0:${cfg.sabnzbd.port}:8080"
@@ -1380,6 +1456,32 @@ function normalizeServiceYamlBlock(appName, serviceYaml) {
     .trimEnd();
 }
 
+function ensureRequiredServiceYamlMounts(cfg, appName, serviceYaml) {
+  let normalized = normalizeServiceYamlBlock(appName, serviceYaml);
+
+  if (appName === 'sabnzbd') {
+    const mediaRoot = cfg?.paths?.mediaRoot || '/mnt/media';
+    if (!normalized.includes(':/media')) {
+      const lines = normalized.split('\n');
+      const insertIndex = lines.findIndex((line) => line.trim() === '- /mnt/downloads:/downloads' || line.trim().endsWith(':/downloads'));
+      const mountLine = `      - ${mediaRoot}:/media`;
+
+      if (insertIndex >= 0) {
+        lines.splice(insertIndex, 0, mountLine);
+      } else {
+        const volumesIndex = lines.findIndex((line) => line.trim() === 'volumes:');
+        if (volumesIndex >= 0) {
+          lines.splice(volumesIndex + 1, 0, mountLine);
+        }
+      }
+
+      normalized = lines.join('\n');
+    }
+  }
+
+  return normalized;
+}
+
 function hasServiceYamlBody(appName, serviceYaml) {
   const normalized = normalizeServiceYamlBlock(appName, serviceYaml);
   const lines = normalized.split('\n');
@@ -1402,9 +1504,9 @@ function getDefaultServiceYaml(cfg, appName) {
 function getAppServiceYaml(cfg, appName) {
   const raw = String(cfg?.[appName]?.composeYaml || '').trim();
   if (raw && hasServiceYamlBody(appName, raw)) {
-    return normalizeServiceYamlBlock(appName, raw);
+    return ensureRequiredServiceYamlMounts(cfg, appName, raw);
   }
-  return getDefaultServiceYaml(cfg, appName);
+  return ensureRequiredServiceYamlMounts(cfg, appName, getDefaultServiceYaml(cfg, appName));
 }
 
 function buildComposeFromIndependentYaml(cfg, appNames = TARGET_CONTAINERS.filter((name) => cfg[name]?.enabled)) {
@@ -1703,7 +1805,7 @@ app.post('/api/yaml/:appName', (req, res) => {
     }
 
     const cfg = readEffectiveConfig({ persist: true });
-    cfg[appName].composeYaml = normalizeServiceYamlBlock(appName, raw);
+    cfg[appName].composeYaml = ensureRequiredServiceYamlMounts(cfg, appName, raw);
     syncAppConfigFromServiceYaml(cfg, appName, cfg[appName].composeYaml);
     cfg.composeYaml = buildComposeFromIndependentYaml(cfg);
     writeConfig(cfg);
