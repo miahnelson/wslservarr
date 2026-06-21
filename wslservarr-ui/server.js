@@ -1,5 +1,6 @@
 const express = require('express');
 const fs = require('fs');
+const os = require('os');
 const path = require('path');
 const axios = require('axios');
 const Docker = require('dockerode');
@@ -365,6 +366,23 @@ function readEffectiveConfig({ persist = false } = {}) {
   }
 
   return normalizedRaw;
+}
+
+function getPreferredLanIpv4() {
+  const interfaces = os.networkInterfaces();
+  const candidates = [];
+
+  for (const entries of Object.values(interfaces || {})) {
+    for (const entry of entries || []) {
+      if (!entry || entry.family !== 'IPv4' || entry.internal) continue;
+      const ip = String(entry.address || '').trim();
+      if (!ip) continue;
+      candidates.push(ip);
+    }
+  }
+
+  const preferred = candidates.find((ip) => ip.startsWith('192.168.') || ip.startsWith('10.') || ip.startsWith('172.16.') || ip.startsWith('172.17.') || ip.startsWith('172.'));
+  return preferred || candidates[0] || '';
 }
 
 function apiClient(baseUrl, apiKey) {
@@ -1220,6 +1238,7 @@ async function getDashboardData() {
   return {
     config: readEffectiveConfig({ persist: true }),
     containers,
+    networkHost: getPreferredLanIpv4(),
     deployState,
     autoSetupTriggered,
     autoSetupMessage

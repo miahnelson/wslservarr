@@ -120,6 +120,9 @@ function App() {
       const next = mergeConfig(data.config);
       setConfig(next);
       setContainers(Array.isArray(data.containers) ? data.containers : []);
+      if (data.networkHost && !isLoopbackHost(data.networkHost)) {
+        setNetworkHost(String(data.networkHost).trim());
+      }
       if (data.deployState) {
         setDeployState(data.deployState);
         if (data.deployState.running || (data.deployState.logs || []).length || data.deployState.error) {
@@ -159,6 +162,7 @@ function App() {
 
     const detectNetworkHost = async () => {
       if (typeof window === 'undefined') return;
+      if (networkHost && !isLoopbackHost(networkHost)) return;
       const currentHost = window.location.hostname;
       if (!isLoopbackHost(currentHost)) {
         if (!cancelled) setNetworkHost(currentHost);
@@ -173,7 +177,7 @@ function App() {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [networkHost]);
 
   useEffect(() => {
     if (!actionsMenuOpen) return undefined;
