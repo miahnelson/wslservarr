@@ -20,6 +20,7 @@ The installer script:
 4. Deploys the WSLServarr web UI on port `5055`
 5. Optionally registers WSLServarr to start automatically with Windows
 6. Lets the web UI deploy and configure the app stack from one place
+7. Checks GitHub for a newer `wslservarr.ps1` and updates the local script before continuing
 
 No Docker Desktop is required.
 
@@ -129,6 +130,9 @@ Run:
 ```
 
 If you do not choose an action, the script defaults to `Run` after 5 seconds. On a first install, choose `Setup`.
+
+On normal runs, the script first checks the configured GitHub repo for a newer copy of `wslservarr.ps1`.
+If it updates itself, it exits and asks you to run the command again so the new version is used for the current session.
 
 ### 4. Pick your Windows data root
 
@@ -282,6 +286,14 @@ Menu options:
 # Uninstall interactively
 .\wslservarr.ps1 -Action Uninstall
 ```
+
+### Self-update behavior
+
+- Automatic self-update is enabled for normal GitHub-based usage
+- Self-update is skipped in `-DevMode`
+- Self-update is skipped if you supply a local source path
+- Self-update can be skipped manually for one run with `-SkipSelfUpdate`
+- The previous script is backed up as `wslservarr.ps1.bak`
 
 ### Useful setup parameters
 

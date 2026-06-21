@@ -20,6 +20,7 @@ param(
     [string]$InstallPath = "C:\WSL\wslservarr-wsl",
     [string]$LinuxUser = "wslservarr",
     [string]$DownloadDir = "$PSScriptRoot\.cache",
+    [switch]$SkipSelfUpdate,
 
     # Uninstall parameters
     [switch]$RemoveDistro,
@@ -65,6 +66,73 @@ function Get-SavedInstallSettings {
     } catch {
         Write-Warning "Ignoring invalid install settings file: $InstallSettingsPath"
         return $null
+    }
+}
+
+function Get-GitHubRawFileUrl {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$RepoUrl,
+        [Parameter(Mandatory = $true)]
+        [string]$Branch,
+        [Parameter(Mandatory = $true)]
+        [string]$RelativePath
+    )
+
+    $trimmedRepoUrl = $RepoUrl.Trim()
+    if ($trimmedRepoUrl -notmatch '^https://github\.com/([^/]+)/([^/]+?)(?:\.git)?/?$') {
+        return $null
+    }
+
+    $owner = $matches[1]
+    $repo = $matches[2]
+    return "https://raw.githubusercontent.com/$owner/$repo/$Branch/$RelativePath"
+}
+
+function Invoke-SelfUpdateIfNeeded {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$ScriptPath,
+        [Parameter(Mandatory = $true)]
+        [string]$RepoUrl,
+        [Parameter(Mandatory = $true)]
+        [string]$Branch
+    )
+
+    if ($SkipSelfUpdate -or $DevMode -or $LocalSourcePath) {
+        return $false
+    }
+
+    $rawUrl = Get-GitHubRawFileUrl -RepoUrl $RepoUrl -Branch $Branch -RelativePath 'wslservarr.ps1'
+    if ([string]::IsNullOrWhiteSpace($rawUrl)) {
+        return $false
+    }
+
+    try {
+        $remoteContent = (Invoke-WebRequest -Uri $rawUrl -UseBasicParsing -TimeoutSec 20).Content
+        if ([string]::IsNullOrWhiteSpace($remoteContent)) {
+            return $false
+        }
+
+        $localContent = Get-Content -LiteralPath $ScriptPath -Raw
+        $normalizedLocal = ($localContent -replace "`r`n", "`n").Trim()
+        $normalizedRemote = ($remoteContent -replace "`r`n", "`n").Trim()
+
+        if ($normalizedLocal -eq $normalizedRemote) {
+            return $false
+        }
+
+        $backupPath = "$ScriptPath.bak"
+        Copy-Item -LiteralPath $ScriptPath -Destination $backupPath -Force
+        Set-Content -LiteralPath $ScriptPath -Value $remoteContent -Encoding UTF8
+
+        Write-Host "[SelfUpdate] Updated wslservarr.ps1 from $RepoUrl ($Branch)." -ForegroundColor Green
+        Write-Host "[SelfUpdate] Previous version backed up to: $backupPath" -ForegroundColor DarkGray
+        Write-Host "[SelfUpdate] Re-run the command to continue with the updated script." -ForegroundColor Yellow
+        return $true
+    } catch {
+        Write-Warning "Self-update check skipped: $($_.Exception.Message)"
+        return $false
     }
 }
 
@@ -178,6 +246,13 @@ if (-not $PSBoundParameters.ContainsKey('DataRootPath') -and $savedInstallSettin
 }
 if (-not $PSBoundParameters.ContainsKey('InstallPath') -and $savedInstallSettings?.installPath -and [string]$savedInstallSettings.distroName -eq $DistroName) {
     $InstallPath = [string]$savedInstallSettings.installPath
+}
+
+if ($PSCommandPath) {
+    $didSelfUpdate = Invoke-SelfUpdateIfNeeded -ScriptPath $PSCommandPath -RepoUrl $WebUiRepoUrl -Branch $WebUiRepoBranch
+    if ($didSelfUpdate) {
+        exit 0
+    }
 }
 
 # ============================================================================

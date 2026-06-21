@@ -19,6 +19,12 @@ const APPS_COMPOSE_PATH = '/opt/wslservarr/compose.apps.yml';
 const SHARED_DOCKER_NETWORK = 'wslservarr';
 const SABNZBD_CONFIG_PATH = '/mnt/config/sabnzbd/sabnzbd.ini';
 const PROWLARR_SAB_CATEGORY = 'prowlarr';
+const APP_API_KEY_SOURCES = {
+  sonarr: { path: '/mnt/config/sonarr/config.xml', format: 'xml' },
+  radarr: { path: '/mnt/config/radarr/config.xml', format: 'xml' },
+  prowlarr: { path: '/mnt/config/prowlarr/config.xml', format: 'xml' },
+  sabnzbd: { path: SABNZBD_CONFIG_PATH, format: 'ini' }
+};
 const execFileAsync = promisify(execFile);
 const deployClients = new Set();
 const deployState = {
@@ -304,10 +310,57 @@ function writeConfig(config) {
   fs.writeFileSync(CONFIG_PATH, JSON.stringify(next, null, 2));
 }
 
+function extractApiKeyFromAppConfig(text, format) {
+  const raw = String(text || '');
+  if (!raw.trim()) return '';
+
+  if (format === 'xml') {
+    const match = raw.match(/<ApiKey>([^<]+)<\/ApiKey>/i);
+    return String(match?.[1] || '').trim();
+  }
+
+  if (format === 'ini') {
+    const match = raw.match(/^api_key\s*=\s*(.+)$/im);
+    return String(match?.[1] || '').trim();
+  }
+
+  return '';
+}
+
+function syncApiKeysFromConfigFiles(cfg) {
+  let changed = false;
+
+  for (const [appName, source] of Object.entries(APP_API_KEY_SOURCES)) {
+    if (!cfg?.[appName] || String(cfg[appName].apiKey || '').trim()) {
+      continue;
+    }
+
+    try {
+      if (!fs.existsSync(source.path)) {
+        continue;
+      }
+
+      const text = fs.readFileSync(source.path, 'utf8');
+      const discoveredApiKey = extractApiKeyFromAppConfig(text, source.format);
+      if (!discoveredApiKey) {
+        continue;
+      }
+
+      cfg[appName].apiKey = discoveredApiKey;
+      changed = true;
+    } catch {
+      // Ignore config parsing failures and keep the saved value unchanged.
+    }
+  }
+
+  return changed;
+}
+
 function readEffectiveConfig({ persist = false } = {}) {
   const raw = readConfig();
   const normalizedRaw = normalizeConfig(raw);
-  if (persist && JSON.stringify(raw) !== JSON.stringify(normalizedRaw)) {
+  const discoveredApiKeys = syncApiKeysFromConfigFiles(normalizedRaw);
+  if (persist && (discoveredApiKeys || JSON.stringify(raw) !== JSON.stringify(normalizedRaw))) {
     writeConfig(normalizedRaw);
   }
 
