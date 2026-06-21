@@ -27,6 +27,7 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
+$InstallSettingsPath = Join-Path $PSScriptRoot ".wslservarr-install.json"
 
 # Resolve dev source path
 if ($DevMode -and -not $LocalSourcePath) {
@@ -35,6 +36,62 @@ if ($DevMode -and -not $LocalSourcePath) {
 if ($LocalSourcePath) {
     $LocalSourcePath = (Resolve-Path $LocalSourcePath).Path.TrimEnd('\')
     Write-Host "[DEV] Using local source: $LocalSourcePath" -ForegroundColor Cyan
+}
+
+function Get-DefaultInstallPathForDataRoot {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$RootPath,
+        [Parameter(Mandatory = $true)]
+        [string]$Distro
+    )
+
+    $qualifiedRoot = Split-Path -Path ([System.IO.Path]::GetFullPath($RootPath)) -Qualifier
+    if ([string]::IsNullOrWhiteSpace($qualifiedRoot)) {
+        throw "Unable to determine drive for root path '$RootPath'."
+    }
+
+    return Join-Path (Join-Path $qualifiedRoot 'WSL') $Distro
+}
+
+function Get-SavedInstallSettings {
+    if (-not (Test-Path -LiteralPath $InstallSettingsPath)) {
+        return $null
+    }
+
+    try {
+        return Get-Content -LiteralPath $InstallSettingsPath -Raw | ConvertFrom-Json
+    } catch {
+        Write-Warning "Ignoring invalid install settings file: $InstallSettingsPath"
+        return $null
+    }
+}
+
+function Save-InstallSettings {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$RootPath,
+        [Parameter(Mandatory = $true)]
+        [string]$ResolvedInstallPath,
+        [Parameter(Mandatory = $true)]
+        [string]$Distro
+    )
+
+    $payload = [ordered]@{
+        dataRootPath = $RootPath
+        installPath  = $ResolvedInstallPath
+        distroName   = $Distro
+    }
+
+    $payload | ConvertTo-Json | Set-Content -LiteralPath $InstallSettingsPath -Encoding UTF8
+}
+
+$savedInstallSettings = Get-SavedInstallSettings
+if (-not $PSBoundParameters.ContainsKey('DataRootPath') -and $savedInstallSettings?.dataRootPath) {
+    $DataRootPath = [string]$savedInstallSettings.dataRootPath
+}
+if (-not $PSBoundParameters.ContainsKey('InstallPath') -and $savedInstallSettings?.installPath -and [string]$savedInstallSettings.distroName -eq $DistroName) {
+    $InstallPath = [string]$savedInstallSettings.installPath
 }
 
 # ============================================================================
@@ -466,6 +523,12 @@ if ($Action -eq "Setup") {
     }
 
     $dataRootPath = [System.IO.Path]::GetFullPath($selectedRoot)
+    if ($PSBoundParameters.ContainsKey('InstallPath')) {
+        $resolvedInstallPath = [System.IO.Path]::GetFullPath($InstallPath)
+    } else {
+        $resolvedInstallPath = Get-DefaultInstallPathForDataRoot -RootPath $dataRootPath -Distro $DistroName
+    }
+    $InstallPath = $resolvedInstallPath
     $configPath = Join-Path $dataRootPath "config"
     $mediaPath = Join-Path $dataRootPath "media"
     $downloadsPath = Join-Path $dataRootPath "downloads"
@@ -484,12 +547,15 @@ if ($Action -eq "Setup") {
     Write-Host "  Config:    $configPath"
     Write-Host "  Media:     $mediaPath"
     Write-Host "  Downloads: $downloadsPath"
+    Write-Host "  WSL VHDX:  $InstallPath"
     Write-Host ""
     Write-Host "These will be mounted as:"
     Write-Host "  /mnt/config    (in WSL)"
     Write-Host "  /mnt/media     (in WSL)"
     Write-Host "  /mnt/downloads (in WSL)"
     Write-Host ""
+
+    Save-InstallSettings -RootPath $dataRootPath -ResolvedInstallPath $InstallPath -Distro $DistroName
 
     if ([string]::IsNullOrWhiteSpace($RootFsTar)) {
         $installedDistros = @(wsl -l -q)
@@ -779,6 +845,7 @@ systemctl set-default multi-user.target
     Write-Host "  Config:    $configPath"
     Write-Host "  Media:     $mediaPath"
     Write-Host "  Downloads: $downloadsPath"
+    Write-Host "  WSL VHDX:  $InstallPath"
     Write-Host ""
     Write-Host "Open shell: wsl -d $DistroName"
     Write-Host "Stack file: /opt/wslservarr/compose.yml"
@@ -966,6 +1033,10 @@ elseif ($Action -eq "Uninstall") {
                 if ($PSCmdlet.ShouldProcess($InstallPath, "Remove install path")) {
                     Remove-Item -LiteralPath $InstallPath -Recurse -Force
                 }
+            }
+
+            if ((Test-Path -LiteralPath $InstallSettingsPath) -and $PSCmdlet.ShouldProcess($InstallSettingsPath, "Remove saved install settings")) {
+                Remove-Item -LiteralPath $InstallSettingsPath -Force
             }
 
             Write-Host "Removed distro '$DistroName'." -ForegroundColor Green
