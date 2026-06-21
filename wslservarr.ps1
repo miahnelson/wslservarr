@@ -1,4 +1,5 @@
 ﻿[CmdletBinding(SupportsShouldProcess = $true)]
+# ScriptVersion: 1.0.0
 param(
     [ValidateSet("Run", "Setup", "Uninstall", "Update", "Reinstall", "RestartAll", "Startup")]
     [string]$Action,
@@ -20,6 +21,7 @@ param(
     [string]$InstallPath = "C:\WSL\wslservarr-wsl",
     [string]$LinuxUser = "wslservarr",
     [string]$DownloadDir = "$PSScriptRoot\.cache",
+    [switch]$ApproveSelfUpdate,
     [switch]$SkipSelfUpdate,
     [switch]$RelaunchedFromDataRoot,
 
@@ -29,6 +31,7 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
+$ScriptVersion = [Version]'1.0.0'
 $InstallSettingsPath = Join-Path $PSScriptRoot ".wslservarr-install.json"
 $StartupTaskName = "WSLServarr Startup"
 $ScriptInvocationParameters = @{}
@@ -109,6 +112,49 @@ function Get-GitHubRawFileUrl {
     return "https://raw.githubusercontent.com/$owner/$repo/$Branch/$RelativePath"
 }
 
+function Get-ScriptVersionFromContent {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Content
+    )
+
+    $match = [regex]::Match($Content, "(?m)^\s*\$ScriptVersion\s*=\s*\[Version\]'(?<version>\d+(?:\.\d+){1,3})'")
+    if (-not $match.Success) {
+        return $null
+    }
+
+    try {
+        return [Version]$match.Groups['version'].Value
+    } catch {
+        return $null
+    }
+}
+
+function Read-SelfUpdateApproval {
+    param(
+        [Parameter(Mandatory = $true)]
+        [Version]$CurrentVersion,
+        [Parameter(Mandatory = $true)]
+        [Version]$AvailableVersion,
+        [Parameter(Mandatory = $true)]
+        [string]$RepoUrl,
+        [Parameter(Mandatory = $true)]
+        [string]$Branch
+    )
+
+    try {
+        $response = Read-Host "Self-update available: $CurrentVersion -> $AvailableVersion from $RepoUrl ($Branch). Apply update? [y/N]"
+    } catch {
+        Write-Warning "Self-update available but confirmation could not be collected. Re-run interactively or pass -ApproveSelfUpdate to allow the update."
+        return $false
+    }
+
+    switch -Regex ($response.Trim()) {
+        '^(y|yes)$' { return $true }
+        default { return $false }
+    }
+}
+
 function Invoke-SelfUpdateIfNeeded {
     param(
         [Parameter(Mandatory = $true)]
@@ -138,6 +184,12 @@ function Invoke-SelfUpdateIfNeeded {
         $localContent = Get-Content -LiteralPath $ScriptPath -Raw
         $normalizedLocal = ($localContent -replace "`r`n", "`n").Trim()
         $normalizedRemote = ($remoteContent -replace "`r`n", "`n").Trim()
+        $remoteVersion = Get-ScriptVersionFromContent -Content $normalizedRemote
+
+        if ($null -eq $remoteVersion) {
+            Write-Warning "Self-update skipped because the downloaded script does not expose a parseable script version."
+            return $false
+        }
 
         $localHasRelocationSupport =
             ($normalizedLocal -match '(?m)^\s*function\s+Invoke-SetupFromDataRoot\b') -and
@@ -151,6 +203,23 @@ function Invoke-SelfUpdateIfNeeded {
             return $false
         }
 
+        if ($remoteVersion -lt $ScriptVersion) {
+            Write-Warning "Self-update skipped because the downloaded script version ($remoteVersion) is older than the installed version ($ScriptVersion)."
+            return $false
+        }
+
+        if ($remoteVersion -eq $ScriptVersion) {
+            return $false
+        }
+
+        if (-not $ApproveSelfUpdate) {
+            $approved = Read-SelfUpdateApproval -CurrentVersion $ScriptVersion -AvailableVersion $remoteVersion -RepoUrl $RepoUrl -Branch $Branch
+            if (-not $approved) {
+                Write-Host "[SelfUpdate] Skipped update to version $remoteVersion." -ForegroundColor DarkGray
+                return $false
+            }
+        }
+
         if ($normalizedLocal -eq $normalizedRemote) {
             return $false
         }
@@ -159,7 +228,7 @@ function Invoke-SelfUpdateIfNeeded {
         Copy-Item -LiteralPath $ScriptPath -Destination $backupPath -Force
         Set-Content -LiteralPath $ScriptPath -Value $remoteContent -Encoding UTF8
 
-        Write-Host "[SelfUpdate] Updated wslservarr.ps1 from $RepoUrl ($Branch)." -ForegroundColor Green
+        Write-Host "[SelfUpdate] Updated wslservarr.ps1 to version $remoteVersion from $RepoUrl ($Branch)." -ForegroundColor Green
         Write-Host "[SelfUpdate] Previous version backed up to: $backupPath" -ForegroundColor DarkGray
         Write-Host "[SelfUpdate] Re-run the command to continue with the updated script." -ForegroundColor Yellow
         return $true
